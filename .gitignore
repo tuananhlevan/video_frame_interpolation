@@ -1,0 +1,5 @@
+*.mp4
+.pytest_cache
+.upframe_tmp_dummy_out
+*.egg-info
+tests/

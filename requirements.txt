@@ -1,0 +1,9 @@
+torch>=2.0.0
+torchvision
+numpy
+pyyaml
+tqdm
+opencv-python-headless
+pytest
+omegaconf
+imageio

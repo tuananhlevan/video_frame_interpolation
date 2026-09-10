@@ -1,0 +1,27 @@
+# Broadcast Football 25 -> 50 fps Upframing Production Configuration
+
+# Video properties
+target_fps: 50.0
+resolution: [1920, 1080]
+color_space: "bt709"
+pix_fmt: "yuv420p"
+
+# Model selection
+model: "rife"
+fp16: true
+
+# Multi-GPU distribution
+gpus: "0,1,2"
+chunk_size: 1000
+
+# Scene cut detection
+scene_threshold: 0.35
+
+# Encoding parameters
+crf: 18
+preset: "medium"
+use_nvenc: true
+bitrate: "14M"
+
+# Audio handling
+audio: "copy"  # Stream copy original AAC audio
