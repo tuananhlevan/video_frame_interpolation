@@ -129,9 +129,17 @@ class RIFEModel(BaseVFIModel):
         if resolved_path:
             logger.info(f"Loading RIFE weights from: {resolved_path}")
             try:
-                ckpt = torch.load(resolved_path, map_location=self.device)
+                try:
+                    ckpt = torch.load(resolved_path, map_location=self.device, weights_only=False)
+                except TypeError:
+                    ckpt = torch.load(resolved_path, map_location=self.device)
                 state_dict = ckpt["state_dict"] if isinstance(ckpt, dict) and "state_dict" in ckpt else ckpt
-                clean_state = {k.replace("module.", ""): v for k, v in state_dict.items()}
+                clean_state = {}
+                for k, v in state_dict.items():
+                    name = k.replace("module.", "")
+                    if name.startswith("flownet."):
+                        name = name[len("flownet."):]
+                    clean_state[name] = v
                 self.net.load_state_dict(clean_state, strict=False)
                 logger.info("Successfully loaded RIFE weights.")
             except Exception as e:

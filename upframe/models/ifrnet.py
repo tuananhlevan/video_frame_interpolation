@@ -58,7 +58,10 @@ class IFRNetModel(BaseVFIModel):
         resolved_path = resolve_checkpoint("ifrnet", checkpoint_path)
         if resolved_path:
             logger.info(f"Loading IFRNet weights from {resolved_path}")
-            state_dict = torch.load(resolved_path, map_location=self.device)
+            try:
+                state_dict = torch.load(resolved_path, map_location=self.device, weights_only=False)
+            except TypeError:
+                state_dict = torch.load(resolved_path, map_location=self.device)
             self.model.load_state_dict(state_dict, strict=False)
         else:
             logger.warning("No IFRNet checkpoint found. Using initialized weights.")

@@ -64,7 +64,10 @@ class AMTModel(BaseVFIModel):
         resolved_path = resolve_checkpoint("amt", checkpoint_path)
         if resolved_path:
             logger.info(f"Loading AMT weights from {resolved_path}")
-            ckpt = torch.load(resolved_path, map_location=self.device)
+            try:
+                ckpt = torch.load(resolved_path, map_location=self.device, weights_only=False)
+            except TypeError:
+                ckpt = torch.load(resolved_path, map_location=self.device)
             state_dict = ckpt["state_dict"] if isinstance(ckpt, dict) and "state_dict" in ckpt else ckpt
             self.model.load_state_dict(state_dict, strict=False)
         else:

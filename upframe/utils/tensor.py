@@ -12,6 +12,9 @@ def frame_to_tensor(
     half: bool = False
 ) -> torch.Tensor:
     """Converts a (H, W, 3) uint8 or float [0, 255] NumPy frame to a (1, 3, H, W) PyTorch tensor [0, 1]."""
+    if not frame.flags.writeable:
+        frame = frame.copy()
+
     if frame.ndim == 3:
         # (H, W, C) -> (C, H, W)
         t = torch.from_numpy(frame).permute(2, 0, 1).unsqueeze(0).float()
@@ -70,16 +73,17 @@ def unpad(tensor: torch.Tensor, orig_h: int, orig_w: int) -> torch.Tensor:
 def warp(tenInput: torch.Tensor, tenFlow: torch.Tensor) -> torch.Tensor:
     """Backward optical flow warping via F.grid_sample."""
     flow_device = tenFlow.device
+    flow_dtype = tenInput.dtype
     B, C, H, W = tenInput.shape
 
-    horizontal = torch.linspace(-1.0, 1.0, W, device=flow_device).view(1, 1, 1, W).expand(B, -1, H, -1)
-    vertical = torch.linspace(-1.0, 1.0, H, device=flow_device).view(1, 1, H, 1).expand(B, -1, -1, W)
+    horizontal = torch.linspace(-1.0, 1.0, W, device=flow_device, dtype=flow_dtype).view(1, 1, 1, W).expand(B, -1, H, -1)
+    vertical = torch.linspace(-1.0, 1.0, H, device=flow_device, dtype=flow_dtype).view(1, 1, H, 1).expand(B, -1, -1, W)
     grid = torch.cat([horizontal, vertical], 1)
 
     norm_flow = torch.cat([
         tenFlow[:, 0:1, :, :] / ((W - 1.0) / 2.0),
         tenFlow[:, 1:2, :, :] / ((H - 1.0) / 2.0)
-    ], 1)
+    ], 1).to(flow_dtype)
 
-    g = (grid + norm_flow).permute(0, 2, 3, 1)
+    g = (grid + norm_flow).permute(0, 2, 3, 1).to(flow_dtype)
     return F.grid_sample(tenInput, g, mode='bilinear', padding_mode='border', align_corners=True)
