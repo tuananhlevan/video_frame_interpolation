@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 class AMTModel(BaseVFIModel):
     """AMT model adapter wrapping the cloned amt repository."""
 
-    def __init__(self) -> None:
-        super().__init__(name="amt")
+    def __init__(self, name: str = "amt") -> None:
+        super().__init__(name=name)
         self.model = None
         self.niters = 6
 
@@ -45,8 +45,8 @@ class AMTModel(BaseVFIModel):
         if amt_dir not in sys.path:
             sys.path.insert(0, amt_dir)
 
-        # 1. Resolve checkpoint path first
-        resolved_path = resolve_checkpoint("amt", checkpoint_path)
+        # 1. Resolve checkpoint path first (using self.name, e.g. amt-g, amt-s, amt-l)
+        resolved_path = resolve_checkpoint(self.name, checkpoint_path)
         state_dict = None
         if resolved_path:
             logger.info(f"Loading AMT weights from {resolved_path}")
@@ -67,7 +67,9 @@ class AMTModel(BaseVFIModel):
             resolved_cfg = os.path.join(amt_dir, config_path)
         else:
             variant = "AMT-S"
-            if resolved_path:
+            if self.name in ["amt-g", "amt-l", "amt-s"]:
+                variant = self.name.upper()
+            elif resolved_path:
                 basename = os.path.basename(resolved_path).lower()
                 if "amt-g" in basename or "amt_g" in basename:
                     variant = "AMT-G"
@@ -144,3 +146,27 @@ class AMTModel(BaseVFIModel):
         if is_numpy:
             return tensor_to_frame(pred)
         return pred
+
+
+@ModelRegistry.register("amt-s")
+class AMTSModel(AMTModel):
+    """AMT-S (Small) model adapter."""
+
+    def __init__(self) -> None:
+        super().__init__(name="amt-s")
+
+
+@ModelRegistry.register("amt-l")
+class AMTLModel(AMTModel):
+    """AMT-L (Large) model adapter."""
+
+    def __init__(self) -> None:
+        super().__init__(name="amt-l")
+
+
+@ModelRegistry.register("amt-g")
+class AMTGModel(AMTModel):
+    """AMT-G (Giant) model adapter."""
+
+    def __init__(self) -> None:
+        super().__init__(name="amt-g")
