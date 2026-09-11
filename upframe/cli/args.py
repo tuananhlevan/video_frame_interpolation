@@ -1,6 +1,7 @@
 """Argument parsing and configuration resolution for the upframe CLI."""
 
 import argparse
+import os
 from typing import List, Optional, Tuple
 from upframe.core.config import PipelineConfig
 
@@ -46,6 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default=None, help="Path to YAML configuration file")
     parser.add_argument("--fp16", dest="fp16", action="store_true", default=True, help="Enable FP16 inference")
     parser.add_argument("--no-fp16", dest="fp16", action="store_false", help="Disable FP16 inference")
+    parser.add_argument("--log-file", default=None, help="Path to write execution log file (default: <output>.log)")
 
     return parser
 
@@ -86,5 +88,6 @@ def parse_cli_args(args_list: Optional[List[str]] = None) -> Tuple[str, str, Pip
     if args.gpus:
         config.gpus = parse_gpus(args.gpus)
     config.fp16 = args.fp16
+    config.log_file = args.log_file or f"{os.path.splitext(output_path)[0]}.log"
 
     return input_path, output_path, config

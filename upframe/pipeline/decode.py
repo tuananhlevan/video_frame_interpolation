@@ -42,10 +42,17 @@ class VideoDecoder:
 
         if start_frame > 0:
             start_sec = max(0.0, start_frame / fps)
-            # Fast seek before input
-            cmd.extend(["-ss", f"{start_sec:.4f}"])
-
-        cmd.extend(["-i", self.filepath])
+            if start_sec > 10.0:
+                # Two-stage seek: fast coarse seek, then frame-accurate fine seek
+                cmd.extend(["-ss", f"{max(0.0, start_sec - 3.0):.4f}"])
+                cmd.extend(["-i", self.filepath])
+                cmd.extend(["-ss", f"{min(start_sec, 3.0):.4f}"])
+            else:
+                # Precise seek after -i
+                cmd.extend(["-i", self.filepath])
+                cmd.extend(["-ss", f"{start_sec:.4f}"])
+        else:
+            cmd.extend(["-i", self.filepath])
 
         if count is not None and count > 0:
             cmd.extend(["-frames:v", str(count)])

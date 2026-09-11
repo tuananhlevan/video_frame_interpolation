@@ -23,6 +23,7 @@ class PipelineConfig:
     fp16: bool = True
     max_retries: int = 3
     target_fps: float = 50.0
+    log_file: Optional[str] = None
 
     @classmethod
     def from_yaml(cls, path: str) -> "PipelineConfig":

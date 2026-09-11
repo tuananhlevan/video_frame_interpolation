@@ -22,6 +22,17 @@ def main() -> int:
         print(f"\nError: {e}")
         return 1
 
+    if config.log_file:
+        log_dir = os.path.dirname(os.path.abspath(config.log_file))
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
+        file_handler = logging.FileHandler(config.log_file, mode="a", encoding="utf-8")
+        file_handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+        )
+        logging.getLogger().addHandler(file_handler)
+        logger.info(f"Execution log file: {config.log_file}")
+
     if not os.path.exists(input_path):
         logger.error(f"Input file does not exist: {input_path}")
         return 1
@@ -54,7 +65,9 @@ def main() -> int:
 
     try:
         report = scheduler.run()
-        print("\n" + report.render_text() + "\n")
+        report_text = report.render_text()
+        print("\n" + report_text + "\n")
+        logger.info(f"Final Report:\n{report_text}")
         logger.info(f"Upframing completed successfully! Output: {output_path}")
         return 0
     except Exception as e:

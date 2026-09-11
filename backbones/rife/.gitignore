@@ -7,7 +7,7 @@ output/*
 train_log/*
 *.mp4
 
-test/
+tests/
 .idea/
 *.npz
 

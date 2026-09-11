@@ -79,7 +79,7 @@ class GPUWorker:
                 return ChunkResult(
                     chunk_id=task.chunk_id,
                     status="COMPLETED",
-                    output_file=chunk_output_path,
+                    output_file=chunk_output_path if len(source_frames) == 1 else None,
                     source_frames_count=len(source_frames),
                     output_frames_count=len(source_frames),
                     scene_cuts_count=0,
