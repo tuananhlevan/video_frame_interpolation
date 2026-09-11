@@ -31,7 +31,7 @@ class AMTModel(BaseVFIModel):
         self,
         device: str = "cuda",
         checkpoint_path: Optional[str] = None,
-        config_path: str = "amt/cfgs/AMT-S.yaml",
+        config_path: Optional[str] = None,
         niters: int = 6,
         **kwargs: Any
     ) -> None:
@@ -45,31 +45,65 @@ class AMTModel(BaseVFIModel):
         if amt_dir not in sys.path:
             sys.path.insert(0, amt_dir)
 
-        try:
-            from omegaconf import OmegaConf
-            from utils.build_utils import build_from_cfg
+        # 1. Resolve checkpoint path first
+        resolved_path = resolve_checkpoint("amt", checkpoint_path)
+        state_dict = None
+        if resolved_path:
+            logger.info(f"Loading AMT weights from {resolved_path}")
+            try:
+                try:
+                    ckpt = torch.load(resolved_path, map_location=self.device, weights_only=False)
+                except TypeError:
+                    ckpt = torch.load(resolved_path, map_location=self.device)
+                state_dict = ckpt["state_dict"] if isinstance(ckpt, dict) and "state_dict" in ckpt else ckpt
+            except Exception as e:
+                logger.warning(f"Failed to read AMT checkpoint from {resolved_path}: {e}")
 
-            if config_path and os.path.exists(config_path):
-                resolved_cfg = config_path
+        # 2. Resolve configuration (auto-detect AMT-G, AMT-L, or AMT-S)
+        resolved_cfg = None
+        if config_path and os.path.exists(config_path):
+            resolved_cfg = config_path
+        elif config_path and os.path.exists(os.path.join(amt_dir, config_path)):
+            resolved_cfg = os.path.join(amt_dir, config_path)
+        else:
+            variant = "AMT-S"
+            if resolved_path:
+                basename = os.path.basename(resolved_path).lower()
+                if "amt-g" in basename or "amt_g" in basename:
+                    variant = "AMT-G"
+                elif "amt-l" in basename or "amt_l" in basename:
+                    variant = "AMT-L"
+                elif state_dict and "update4.convf1.weight" in state_dict:
+                    out_ch = state_dict["update4.convf1.weight"].shape[0]
+                    if out_ch == 128:
+                        variant = "AMT-G"
+                    elif out_ch == 96:
+                        variant = "AMT-L"
+                    else:
+                        variant = "AMT-S"
+
+            candidate_cfg = os.path.join(amt_dir, "cfgs", f"{variant}.yaml")
+            if os.path.exists(candidate_cfg):
+                resolved_cfg = candidate_cfg
             elif os.path.exists(os.path.join(amt_dir, "cfgs/AMT-S.yaml")):
                 resolved_cfg = os.path.join(amt_dir, "cfgs/AMT-S.yaml")
             else:
                 resolved_cfg = "cfgs/AMT-S.yaml"
+
+        try:
+            from omegaconf import OmegaConf
+            from utils.build_utils import build_from_cfg
+
+            logger.info(f"Building AMT network using config: {resolved_cfg}")
             cfg = OmegaConf.load(resolved_cfg)
             self.model = build_from_cfg(cfg.network).to(self.device).eval()
         except Exception as e:
             logger.error(f"Failed to build AMT network: {e}")
             raise
 
-        resolved_path = resolve_checkpoint("amt", checkpoint_path)
-        if resolved_path:
-            logger.info(f"Loading AMT weights from {resolved_path}")
-            try:
-                ckpt = torch.load(resolved_path, map_location=self.device, weights_only=False)
-            except TypeError:
-                ckpt = torch.load(resolved_path, map_location=self.device)
-            state_dict = ckpt["state_dict"] if isinstance(ckpt, dict) and "state_dict" in ckpt else ckpt
+        if state_dict is not None:
             self.model.load_state_dict(state_dict, strict=False)
+            logger.info("Successfully loaded AMT weights.")
         else:
             logger.warning("No AMT checkpoint found. Using initialized network.")
 
@@ -98,8 +132,13 @@ class AMTModel(BaseVFIModel):
 
         with torch.no_grad():
             embt = torch.tensor(0.5, device=self.device).view(1, 1, 1, 1).float()
-            outputs = self.model(ta, tb, embt=embt, iters=self.niters)
-            pred = outputs[0] if isinstance(outputs, (list, tuple)) else outputs
+            outputs = self.model(ta, tb, embt=embt, iters=self.niters, eval=True)
+            if isinstance(outputs, dict):
+                pred = outputs.get("imgt_pred", outputs)
+            elif isinstance(outputs, (list, tuple)):
+                pred = outputs[0]
+            else:
+                pred = outputs
 
         pred = unpad(pred, orig_h, orig_w)
         if is_numpy:

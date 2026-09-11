@@ -38,10 +38,10 @@ def tensor_to_frame(tensor: torch.Tensor) -> np.ndarray:
     t = tensor.detach().cpu().float()
     if t.ndim == 4:
         t = t.squeeze(0)
-    # (3, H, W) -> (H, W, 3)
     frame = t.permute(1, 2, 0).numpy()
+    frame = np.nan_to_num(frame, nan=0.0)
     frame = np.clip(frame, 0.0, 1.0) * 255.0
-    return frame.astype(np.uint8)
+    return np.round(frame).astype(np.uint8)
 
 
 def pad_to_multiple(
