@@ -1,0 +1,2185 @@
+UPFRAME + EVALUATION SYSTEM
+COMPLETE PROJECT SPECIFICATION
+
+Purpose:
+Production-oriented 25 FPS -> 50 FPS football broadcast upframing
+with plug-and-play pretrained VFI models and a comprehensive evaluation
+pipeline.
+
+======================================================================
+0. EXECUTIVE SUMMARY
+======================================================================
+
+This project is a production-oriented video frame interpolation
+("upframing") system.
+
+The primary use case is:
+
+    INPUT:
+        ~25 FPS football/soccer broadcast video
+        typically 1920x1080
+        usually compressed online/broadcast footage
+
+    OUTPUT:
+        50 FPS video at the same spatial resolution
+
+The system generates one AI-created intermediate frame between each pair
+of adjacent source frames.
+
+Conceptually:
+
+    Source:
+        A -------- B -------- C -------- D
+
+    Output:
+        A ---- X ---- B ---- Y ---- C ---- Z ---- D
+              ^              ^
+              generated      generated
+
+The system is NOT intended to train a new model or fine-tune an existing
+model.
+
+Instead, it should use existing pretrained, plug-and-play VFI
+repositories/models such as:
+
+    - RIFE / Practical-RIFE
+    - AMT / AMT-S
+    - FILM
+    - IFRNet
+    - other compatible pretrained VFI models as future adapters
+
+The processing environment contains:
+
+    - 3 x NVIDIA L40S GPUs
+    - 48 GB VRAM per GPU
+
+Target turnaround time:
+
+    approximately 1.0x to 1.3x source-video duration
+
+Example:
+
+    60-minute video -> approximately 60-78 minutes processing
+
+The system should behave like a simple production tool:
+
+    upframe input.mp4 output_50fps.mp4
+
+The user should not need to manually extract frames, run notebooks,
+manage model scripts, or understand VFI internals.
+
+The system should automatically:
+
+    1. inspect the source
+    2. validate the source
+    3. detect scene cuts
+    4. split/schedule processing
+    5. run VFI on 3 GPUs
+    6. reconstruct the 50 FPS sequence
+    7. preserve timing and audio
+    8. encode the final video
+    9. evaluate technical correctness
+   10. evaluate temporal quality
+   11. detect/flag newly introduced artifacts
+   12. measure performance
+   13. produce a machine-readable and human-readable report
+
+
+======================================================================
+1. PRIMARY VIDEO TARGET
+======================================================================
+
+The main target is football/soccer broadcast footage, especially footage
+obtained from online streams or broadcast recordings.
+
+Typical characteristics:
+
+    - approximately 1920x1080
+    - approximately 25 FPS
+    - H.264/H.265 compressed source
+    - 4:2:0 video
+    - BT.709 or comparable broadcast color metadata
+    - AAC or similar audio
+    - long-form matches, often 60-120 minutes
+    - broadcast camera movement
+    - multiple independent moving players
+    - small and fast-moving ball
+    - player-player occlusions
+    - pitch lines and geometric markings
+    - grass texture
+    - goalposts and goal nets
+    - crowds
+    - LED advertising boards
+    - scoreboards
+    - channel logos/watermarks
+    - replays and slow-motion sports segments
+    - hard cuts between camera angles
+
+The specific challenge is not simply generating more frames.
+
+The objective is:
+
+    "Make the 50 FPS result look as if it contains natural,
+     believable intermediate motion, without introducing visible
+     new artifacts."
+
+
+======================================================================
+2. HARDWARE AND PROCESSING TARGET
+======================================================================
+
+Available hardware:
+
+    GPU 0: NVIDIA L40S 48 GB
+    GPU 1: NVIDIA L40S 48 GB
+    GPU 2: NVIDIA L40S 48 GB
+
+Preferred architecture:
+
+    Use three independent GPU workers.
+
+Do NOT initially use model parallelism across the three GPUs.
+
+Preferred design:
+
+                          VIDEO
+                            |
+                       job scheduler
+                    /        |        \
+                   /         |         \
+                GPU 0      GPU 1      GPU 2
+                worker     worker     worker
+                   \         |         /
+                    \        |        /
+                      ordered merge
+
+Each worker should process independent chunks of the video.
+
+Why:
+
+    - simple scaling
+    - good GPU utilization
+    - easy crash recovery
+    - easy load balancing
+    - no need to synchronize model layers across GPUs
+
+
+======================================================================
+3. PERFORMANCE REQUIREMENT
+======================================================================
+
+The production target is:
+
+    realtime factor (RTF) = processing time / source duration
+
+Target:
+
+    1.0 <= RTF <= 1.3
+
+Example:
+
+    source duration = 90 minutes
+    processing time = 99 minutes
+
+    RTF = 99 / 90
+        = 1.10x
+
+Approximate throughput requirement for a 90-minute 25 FPS match:
+
+    90 minutes x 60 seconds = 5400 seconds
+    5400 x 25 = 135,000 source frames
+
+Approximately one intermediate frame must be generated for each
+source-frame interval.
+
+Therefore the system needs approximately:
+
+    135,000 / 5,400 = 25 interpolations/sec
+
+for a 1.0x target.
+
+At 1.3x:
+
+    135,000 / 7,020 ~= 19.2 interpolations/sec
+
+Across three GPUs, the approximate requirement is:
+
+    ~6.4-8.3 interpolations/sec/GPU
+
+depending on the target RTF.
+
+Exact achievable throughput MUST be benchmarked with the actual
+repository, model, GPU configuration, resolution, batch size, and
+inference implementation.
+
+Do not select a model based on paper FPS numbers alone.
+
+
+======================================================================
+4. MODEL STRATEGY
+======================================================================
+
+The entire pipeline should be model-agnostic.
+
+Initial model candidates:
+
+    A. RIFE / Practical-RIFE
+       Purpose:
+           fast, practical production baseline
+
+    B. AMT / AMT-S
+       Purpose:
+           quality-oriented modern VFI candidate
+
+    C. FILM
+       Purpose:
+           large-motion / high-quality reference candidate
+
+    D. IFRNet
+       Purpose:
+           efficient alternative
+
+The pipeline should provide adapters such as:
+
+    models/
+        base.py
+        rife.py
+        amt.py
+        film.py
+        ifrnet.py
+
+The common interface should conceptually expose:
+
+    load()
+    interpolate(frame_a, frame_b)
+    unload()
+
+This lets the rest of the pipeline treat different VFI models uniformly.
+
+The initial production selection should be made empirically using the
+actual football benchmark material and 3 x L40S hardware.
+
+No training or fine-tuning is required.
+
+No new football-specific model should be assumed.
+
+
+======================================================================
+5. IMPORTANT MODEL/PIPELINE PRINCIPLE
+======================================================================
+
+Do not confuse:
+
+    "best academic VFI score"
+
+with:
+
+    "best production model for football"
+
+A model can have strong PSNR/SSIM numbers while producing:
+
+    - bad ball motion
+    - distorted feet
+    - ghost players
+    - unstable geometry
+    - flickering graphics
+
+Conversely, a model with slightly worse pixel metrics may look much better
+to a human viewer.
+
+Model selection therefore combines:
+
+    - perceptual quality
+    - temporal quality
+    - football-specific quality
+    - added artifact rate
+    - reliability
+    - processing speed
+
+
+======================================================================
+6. OVERALL PRODUCTION PIPELINE
+======================================================================
+
+The complete system should be:
+
+                         INPUT VIDEO
+                              |
+                              v
+                    1. PROBE / ANALYZE
+                              |
+                              v
+                    2. SOURCE BASELINE
+                              |
+                              v
+                    3. SCENE / CUT ANALYSIS
+                              |
+                              v
+                    4. CHUNK + SCHEDULER
+                              |
+                +-------------+-------------+
+                |             |             |
+                v             v             v
+              GPU 0         GPU 1         GPU 2
+                |             |             |
+                +-------------+-------------+
+                              |
+                              v
+                       5. VFI INFERENCE
+                              |
+                              v
+                    6. MERGE + TIMESTAMPS
+                              |
+                              v
+                    7. ENCODE + AUDIO
+                              |
+                              v
+                       OUTPUT 50 FPS
+                              |
+                              v
+                    8. EVALUATION ENGINE
+                              |
+              +---------------+----------------+
+              |               |                |
+              v               v                v
+        TECHNICAL QC    TEMPORAL QC      ARTIFACT QC
+              |               |                |
+              +---------------+----------------+
+                              |
+                              v
+                       FOOTBALL QC
+                              |
+                              v
+                       HUMAN REVIEW
+                              |
+                              v
+                    PERFORMANCE REPORT
+                              |
+                              v
+                       FINAL REPORT
+
+
+======================================================================
+7. COMPONENT 1 — PROBE / ANALYZE
+======================================================================
+
+Purpose:
+
+    Determine exactly what the source video contains before processing.
+
+This component should not alter the video.
+
+It should collect:
+
+VIDEO:
+    - filename
+    - duration
+    - resolution
+    - codec
+    - pixel format
+    - color space
+    - color range
+    - nominal frame rate
+    - average frame rate
+    - frame count where reliably available
+    - time base
+    - PTS information
+    - field order/interlacing information
+    - bitrate
+
+AUDIO:
+    - codec
+    - sample rate
+    - channels
+    - duration
+    - stream metadata
+
+Why:
+
+A file that says "25 FPS" may have actual timing that is slightly different,
+for example around 25.02 FPS. The pipeline should operate using actual
+timing information rather than blindly assuming every frame is exactly
+40 ms apart.
+
+Example CLI:
+
+    upframe probe match.mp4
+
+Example conceptual output:
+
+    VIDEO
+      Resolution: 1920x1080
+      FPS:        25.019
+      Frames:     135000
+      Duration:   5400.0 sec
+      Codec:      H.264
+
+    AUDIO
+      Codec:      AAC
+      Sample rate:48000 Hz
+      Channels:   2
+
+
+======================================================================
+8. COMPONENT 2 — SOURCE BASELINE / SOURCE QC
+======================================================================
+
+Purpose:
+
+    Determine what artifacts already exist in the source video.
+
+This is essential because a source football broadcast may already contain:
+
+    - jagged edges
+    - aliasing
+    - compression artifacts
+    - motion blur
+    - ringing
+    - existing ghosting
+    - sharpening artifacts
+
+The evaluation system MUST NOT automatically blame VFI for every artifact
+visible in the final output.
+
+Example:
+
+    Source:
+        jagged edge = already present
+
+    Output:
+        jagged edge = still present
+
+That does not necessarily mean VFI created it.
+
+The important measurement is:
+
+    ADDED ARTIFACT
+
+Conceptually:
+
+    Added artifact = Output artifact - Source artifact
+
+For example:
+
+                     Source    Output    Added
+    ------------------------------------------------
+    Jagged edge         8.4%      8.5%     +0.1%
+    Ghosting            0.7%      1.1%     +0.4%
+    Player deformation  0.1%      0.4%     +0.3%
+    Ball artifact       0.2%      0.8%     +0.6%
+
+These numbers are illustrative; actual thresholds must be calibrated.
+
+The source baseline should be measured at least on representative
+segments, and ideally automatically where practical.
+
+
+======================================================================
+9. COMPONENT 3 — SCENE / CUT DETECTION
+======================================================================
+
+Purpose:
+
+    Identify transitions where normal frame interpolation should not be
+    applied.
+
+Typical broadcast events:
+
+    - hard camera cut
+    - replay transition
+    - camera change
+    - fade
+    - graphics transition
+
+Critical rule:
+
+    DO NOT INTERPOLATE ACROSS A HARD CUT.
+
+Example:
+
+    Shot A -------- CUT -------- Shot B
+
+Incorrect:
+
+    Shot A -> synthetic hybrid frame -> Shot B
+
+Correct:
+
+    Shot A ends
+    CUT
+    Shot B starts
+
+Possible tools/methods:
+
+    - histogram difference
+    - SSIM/perceptual difference
+    - PySceneDetect-like methods
+    - thresholded multi-feature scene-change detection
+
+Initial output can simply be:
+
+    same_scene = interpolate
+    hard_cut  = do not interpolate
+
+Replay classification can be more advanced later. It should be kept
+separate from hard-cut detection because a replay can itself be an
+interpolatable continuous segment.
+
+
+======================================================================
+10. COMPONENT 4 — CHUNKING AND GPU SCHEDULER
+======================================================================
+
+Purpose:
+
+    Break long videos into manageable jobs and keep all three L40S GPUs
+    continuously utilized.
+
+Example:
+
+    match
+      |
+      +-- chunk 000
+      +-- chunk 001
+      +-- chunk 002
+      +-- ...
+      +-- chunk N
+
+The scheduler should dynamically assign completed work:
+
+    queue
+      |
+      +--> GPU 0
+      +--> GPU 1
+      +--> GPU 2
+
+Avoid rigid scheduling that causes a fast GPU to wait for a slow chunk.
+
+Chunks should overlap by one or more source frames as required.
+
+Example:
+
+    Chunk A: frames 0-1001
+    Chunk B: frames 1000-2001
+
+The overlap allows correct interpolation at the boundary.
+
+The merge stage later removes duplicated overlap output.
+
+
+======================================================================
+11. COMPONENT 5 — VFI INFERENCE
+======================================================================
+
+Purpose:
+
+    Generate exactly one intermediate frame between each pair of source
+    frames.
+
+Example:
+
+    Source:
+        A -------- B -------- C
+
+    VFI:
+        A ---- X ---- B ---- Y ---- C
+
+The model gets:
+
+    Frame A
+    Frame B
+
+and generates:
+
+    Frame X at approximately t=0.5
+
+For this project, the target is a straightforward 2x temporal expansion:
+
+    ~25 FPS -> 50 FPS
+
+There is no need to recursively process:
+
+    25 -> 50 -> 100 -> 200
+
+The model adapter should hide repository-specific details from the rest
+of the pipeline.
+
+
+======================================================================
+12. COMPONENT 6 — MERGE AND TIMESTAMP RECONSTRUCTION
+======================================================================
+
+Purpose:
+
+    Reconstruct the exact global frame order after distributed processing.
+
+GPU workers may finish out of order:
+
+    GPU 0 -> chunk 0
+    GPU 2 -> chunk 1
+    GPU 1 -> chunk 2
+
+But output MUST be:
+
+    chunk 0 -> chunk 1 -> chunk 2
+
+The merge stage handles:
+
+    - ordering
+    - overlap deduplication
+    - frame count
+    - PTS
+    - output duration
+    - chunk boundaries
+
+Do not simply concatenate files without validating timestamps.
+
+Output sequence:
+
+    A X B Y C Z D ...
+
+
+======================================================================
+13. COMPONENT 7 — ENCODE + AUDIO
+======================================================================
+
+Purpose:
+
+    Produce the final deliverable video.
+
+Target:
+
+    ~1920x1080
+    50 FPS
+    same general color characteristics
+    appropriate H.264/H.265 codec
+    original audio retained where possible
+
+Audio should preferably be stream-copied:
+
+    Video:
+        25 FPS -> VFI -> 50 FPS -> encode
+
+    Audio:
+        original AAC -----------------> copy
+
+Do not unnecessarily re-encode audio.
+
+The encoder must be fixed during model benchmarking so that codec
+differences do not get mistaken for VFI quality differences.
+
+
+======================================================================
+14. COMPONENT 8 — TECHNICAL EVALUATION
+======================================================================
+
+This verifies that the pipeline technically produced a valid video.
+
+Checks:
+
+    - resolution
+    - output FPS
+    - frame count
+    - duration
+    - PTS continuity
+    - frame ordering
+    - duplicate frames
+    - missing frames
+    - decode errors
+    - audio existence
+    - audio duration
+    - A/V sync
+    - scene-cut handling
+
+A technically invalid result should fail even if it looks visually good.
+
+
+======================================================================
+15. ORIGINAL-FRAME PRESERVATION
+======================================================================
+
+This is one of the most important integrity tests.
+
+Input:
+
+    A B C D
+
+Output:
+
+    A X B Y C Z D
+
+Extract:
+
+    A B C D
+
+from the output and compare those frames against the original input.
+
+Use:
+
+    - PSNR
+    - SSIM
+    - optionally MS-SSIM
+    - pixel error
+    - checksums/hashes where applicable
+
+Purpose:
+
+    Detect accidental changes to original frames.
+
+Possible causes of failure:
+
+    - resizing
+    - colorspace conversion
+    - re-encoding
+    - frame ordering
+    - chunk merge errors
+    - dropped frames
+    - unexpected filtering
+
+
+======================================================================
+16. TEMPORAL QUALITY EVALUATION
+======================================================================
+
+Purpose:
+
+    Determine whether the generated frames create natural, continuous
+    motion.
+
+This is more important than judging a single frame in isolation.
+
+For each sequence:
+
+    A -> X -> B
+
+measure:
+
+    - motion progression
+    - optical-flow consistency
+    - temporal residuals
+    - temporal flicker
+    - motion discontinuity
+
+An ideal case resembles:
+
+    A ---- X ---- B
+
+rather than:
+
+    A -- X -------- B
+
+where the intermediate motion is inconsistent.
+
+
+======================================================================
+17. OPTICAL FLOW / TEMPORAL CONSISTENCY
+======================================================================
+
+Use optical flow as a diagnostic tool.
+
+Conceptually:
+
+    A -> B
+    A -> X
+    X -> B
+
+and compare whether:
+
+    X
+
+is temporally consistent with the motion between A and B.
+
+Possible measurements:
+
+    - temporal warping error
+    - flow consistency
+    - motion-boundary error
+    - residual error after motion compensation
+
+These metrics help detect VFI problems that PSNR/SSIM may miss.
+
+
+======================================================================
+18. MOTION SMOOTHNESS
+======================================================================
+
+Calculate motion statistics between consecutive frames.
+
+For example:
+
+    motion(A -> X)
+    motion(X -> B)
+
+A strong discontinuity can indicate interpolation problems.
+
+Extend this across time:
+
+    t-2 -> t-1 -> t -> t+1 -> t+2
+
+and look for abnormal changes in:
+
+    - motion magnitude
+    - motion direction
+    - acceleration
+
+This is particularly useful for football because players and the ball
+have relatively clear trajectories.
+
+
+======================================================================
+19. TEMPORAL FLICKER
+======================================================================
+
+Check for instability that is only visible when the video plays.
+
+Examples:
+
+    - grass texture changes
+    - player edges shimmer
+    - scoreboard changes unexpectedly
+    - LED advertisements flicker
+    - brightness oscillates
+    - object texture crawls
+    - a structure appears/disappears
+
+A frame can look good alone but still cause obvious temporal flicker.
+
+Therefore evaluate both:
+
+    spatial quality
+    temporal behavior
+
+
+======================================================================
+20. ARTIFACT EVALUATION
+======================================================================
+
+Artifact evaluation should NOT use one single generic metric.
+
+Separate artifact classes:
+
+    1. Ghosting
+    2. Double contour
+    3. Jagged/serrated generated edges
+    4. Object deformation
+    5. Object disappearance
+    6. Object duplication
+    7. Occlusion failure
+    8. Geometry distortion
+    9. Temporal flicker
+
+Each artifact should have:
+
+    - source presence
+    - output presence
+    - added artifact
+    - severity
+    - timestamp
+    - motion context
+
+The objective is to identify artifacts introduced or amplified by VFI.
+
+
+======================================================================
+21. MOTION-BOUNDARY ARTIFACTS
+======================================================================
+
+A particularly important class for this project is the artifact seen around
+fast-moving players.
+
+Possible visual symptoms:
+
+    - double contour
+    - edge tearing
+    - ghost edge
+    - warped silhouette
+    - stretched limb
+    - jagged motion boundary
+
+The key diagnostic question is:
+
+    Does artifact probability increase with motion magnitude?
+
+Therefore collect:
+
+    motion magnitude
+    +
+    artifact severity
+
+for each generated frame or region.
+
+Example reporting structure:
+
+    Motion level       Artifact rate
+    ----------------------------------
+    Low                    0.4%
+    Medium                 1.2%
+    High                   5.7%
+    Very high             17.9%
+
+These values are illustrative.
+
+The important output is the relationship:
+
+    motion -> artifact risk
+
+
+======================================================================
+22. FOOTBALL-SPECIFIC QUALITY EVALUATION
+======================================================================
+
+Generic VFI metrics are insufficient.
+
+Football requires dedicated evaluation of:
+
+    A. ball
+    B. players
+    C. player-player occlusion
+    D. pitch geometry
+    E. goal/net
+    F. camera motion
+    G. scoreboard
+    H. watermark
+    I. LED advertising
+    J. replay segments
+
+
+======================================================================
+23. BALL INTEGRITY
+======================================================================
+
+Ball is one of the highest-priority objects.
+
+Reasons:
+
+    - small spatial size
+    - potentially high velocity
+    - motion blur
+    - easy to confuse with background
+    - can move farther between frames than its own diameter
+
+Check:
+
+    - ball exists
+    - exactly one ball
+    - position is plausible
+    - trajectory is smooth
+    - size is plausible
+    - no ghost ball
+    - no duplicate ball
+    - no disappearance
+    - no teleportation
+    - no unnatural stretching
+
+Suggested severity:
+
+    0 = clean
+    1 = barely visible issue
+    2 = noticeable issue
+    3 = severe artifact
+    4 = critical failure
+
+The exact score scale can later be normalized to 1-5 for human review.
+
+
+======================================================================
+24. PLAYER INTEGRITY
+======================================================================
+
+Inspect:
+
+    - body silhouette
+    - legs
+    - feet
+    - arms
+    - hands
+    - head
+    - jersey
+    - player boundary
+
+Look for:
+
+    - extra limbs
+    - missing limbs
+    - warped body
+    - duplicated player
+    - melted silhouette
+    - unnatural deformation
+
+
+======================================================================
+25. PLAYER-PLAYER OCCLUSION
+======================================================================
+
+Football often contains multiple players crossing each other.
+
+Test:
+
+    player A -> crosses player B
+
+Look for:
+
+    - merged players
+    - transparent body parts
+    - ghost limbs
+    - wrong depth ordering
+    - disappearing player
+    - duplicated player
+
+Object detection/tracking can provide useful locations for targeted QC,
+but human review remains important.
+
+
+======================================================================
+26. PITCH GEOMETRY
+======================================================================
+
+Football provides unusually useful geometric references.
+
+Evaluate:
+
+    - touchlines
+    - halfway line
+    - center circle
+    - penalty box
+    - goal box
+    - goal line
+
+Look for:
+
+    - bending
+    - wobbling
+    - double lines
+    - broken lines
+    - shimmering
+
+The pitch can also provide useful information for camera-motion analysis.
+
+
+======================================================================
+27. GOAL AND NET
+======================================================================
+
+Check:
+
+    - goalposts
+    - crossbar
+    - net
+
+These are thin, high-contrast structures that can expose interpolation
+problems even when players look acceptable.
+
+
+======================================================================
+28. CAMERA MOTION
+======================================================================
+
+Test:
+
+    - slow pan
+    - fast pan
+    - player tracking
+    - zoom
+    - ball-following camera
+
+The generated frame should fit smoothly into the camera movement.
+
+Possible metrics:
+
+    - global motion consistency
+    - optical-flow consistency
+    - feature trajectory consistency
+
+The pitch can serve as a strong reference for global camera motion.
+
+
+======================================================================
+29. BROADCAST GRAPHICS
+======================================================================
+
+Check:
+
+    - scoreboard
+    - channel logo
+    - watermark
+    - text
+    - LED advertising
+
+Look for:
+
+    - stretching
+    - wobbling
+    - ghosting
+    - flickering
+    - shifted graphics
+    - unreadable characters
+
+These elements are particularly sensitive because viewers are familiar
+with their expected appearance and they often contain crisp edges.
+
+
+======================================================================
+30. REPLAY / SLOW-MOTION SPORTS SEGMENTS
+======================================================================
+
+Sports broadcasts may contain slow-motion replay sections.
+
+These should be treated as a distinct content category.
+
+Important principle:
+
+    Do not automatically classify a ghost or motion trail already present
+    in the original replay footage as a VFI artifact.
+
+Evaluation should distinguish:
+
+    SOURCE ARTIFACT
+        artifact already exists before VFI
+
+    ADDED VFI ARTIFACT
+        artifact appears or becomes worse after VFI
+
+Example:
+
+    Source replay:
+        existing motion trail
+
+    VFI output:
+        same motion trail, no material increase
+        -> not a significant VFI failure
+
+    VFI output:
+        additional ghost object not present in source
+        -> VFI artifact
+
+
+======================================================================
+31. SOURCE-VS-OUTPUT DIFFERENTIAL
+======================================================================
+
+This is a core evaluation principle.
+
+Do not ask only:
+
+    "Does the output contain artifacts?"
+
+Instead ask:
+
+    "Did VFI introduce or amplify artifacts compared with the source?"
+
+For every artifact class, report:
+
+    source level
+    output level
+    added level
+
+Conceptually:
+
+    delta_artifact = output_artifact - source_artifact
+
+This prevents the system from incorrectly penalizing a model for source
+characteristics such as pre-existing aliasing, compression, or blur.
+
+
+======================================================================
+32. STANDARD VIDEO QUALITY METRICS
+======================================================================
+
+PSNR:
+    Measures pixel-level similarity.
+
+    Useful for:
+        - source-frame preservation
+        - encoding comparison
+        - experiments with true ground truth
+
+    Limitation:
+        No true intermediate frame exists in ordinary 25 FPS source.
+
+SSIM:
+    Measures structural similarity.
+
+    Useful for:
+        - source-frame preservation
+        - encoding comparison
+        - experiments with ground truth
+
+    Limitation:
+        Not enough to judge real-world VFI by itself.
+
+MS-SSIM:
+    Multi-scale structural similarity.
+
+    Use as supporting metric.
+
+LPIPS:
+    Learned perceptual similarity.
+
+    Useful as supporting perceptual metric, especially when ground truth
+    exists.
+
+VMAF:
+    Perceptual video quality metric.
+
+    Useful for:
+        - codec/bitrate comparisons
+        - checking encoding degradation
+        - aligned reference/test comparisons
+
+    Important limitation:
+        Do not blindly compare a 50 FPS VFI output against a 25 FPS source.
+
+A 25 FPS reference does not contain the generated intermediate frames.
+
+Duplicating 25 FPS frames into 50 FPS and using that as a VMAF reference
+can unfairly penalize a good VFI result because the new frames are
+intentionally different from duplicated frames.
+
+
+======================================================================
+33. TRUE GROUND-TRUTH EVALUATION
+======================================================================
+
+If genuine high-frame-rate football footage can be obtained, create a
+scientific benchmark.
+
+Example:
+
+    Original high-FPS footage:
+        F0 F1 F2 F3 F4 F5 F6 F7 F8 ...
+
+Create synthetic 25 FPS input:
+
+        F0 -------- F4 -------- F8
+
+Run VFI:
+
+        F0 ---- predicted F2 ---- F4 ---- predicted F6 ---- F8
+
+Now ground truth exists:
+
+    predicted F2 vs actual F2
+    predicted F6 vs actual F6
+
+This allows meaningful use of:
+
+    - PSNR
+    - SSIM
+    - MS-SSIM
+    - LPIPS
+    - VMAF
+    - flow-based metrics
+    - interpolation-specific metrics
+
+This is the preferred setup for scientific model benchmarking.
+
+
+======================================================================
+34. HUMAN EVALUATION
+======================================================================
+
+Automated metrics cannot fully judge VFI.
+
+Human evaluation should be performed on a curated subset of difficult
+football segments.
+
+Compare:
+
+    A = original 25 FPS
+    B = naive 50 FPS
+    C = AI 50 FPS
+
+For model comparisons:
+
+    A = RIFE
+    B = AMT-S
+    C = FILM
+
+Keep constant:
+
+    - resolution
+    - encoder
+    - bitrate
+    - audio
+    - clip duration
+    - playback conditions
+
+
+======================================================================
+35. HUMAN MOS
+======================================================================
+
+Recommended questions:
+
+OVERALL QUALITY:
+    1 = very poor
+    5 = excellent
+
+MOTION NATURALNESS:
+    1 = very unnatural
+    5 = highly natural
+
+ARTIFACT-FREE QUALITY:
+    1 = severe artifacts
+    5 = essentially artifact-free
+
+PLAYER INTEGRITY:
+    1 = severe problems
+    5 = clean
+
+BALL INTEGRITY:
+    1 = severe problems
+    5 = clean
+
+PAIRWISE PREFERENCE:
+    "Which version would you prefer for football broadcast use?"
+
+Pairwise preference can be especially helpful when model differences are
+subtle.
+
+
+======================================================================
+36. ARTIFACT SEVERITY
+======================================================================
+
+Not every artifact should have equal weight.
+
+Suggested severity scale:
+
+    Level 1:
+        essentially invisible
+        only visible with careful inspection
+
+    Level 2:
+        minor
+        visible mainly when paused or scrutinized
+
+    Level 3:
+        noticeable during normal viewing
+
+    Level 4:
+        severe and clearly distracting
+
+    Level 5:
+        critical
+        destroys object identity or creates obvious impossible motion
+
+Examples of Level 5:
+
+    - two balls when there is only one
+    - player disappears
+    - severe duplicate player
+    - impossible hybrid frame across a cut
+
+
+======================================================================
+37. AUTOMATED SUSPICIOUS-MOMENT DETECTION
+======================================================================
+
+A full match should NOT require a human to watch every second.
+
+Use automated analysis to rank suspicious moments.
+
+Pipeline:
+
+    full match
+        |
+        v
+    temporal analysis
+        |
+        +-- flow anomaly
+        +-- motion anomaly
+        +-- edge anomaly
+        +-- object trajectory anomaly
+        +-- graphics anomaly
+        |
+        v
+    suspicious timestamps
+        |
+        v
+    human review
+
+Example:
+
+    00:13:42.520
+        possible ball artifact
+
+    00:27:18.440
+        possible player/occlusion artifact
+
+    00:51:06.120
+        possible pitch-line distortion
+
+
+======================================================================
+38. PERFORMANCE EVALUATION
+======================================================================
+
+Measure the entire processing stack.
+
+Required measurements:
+
+    - total processing time
+    - realtime factor
+    - interpolations/sec
+    - output frames/sec
+    - GPU utilization
+    - GPU VRAM
+    - CPU utilization
+    - decode speed
+    - VFI speed
+    - encode speed
+    - per-chunk runtime
+    - scheduler idle time
+    - GPU load balance
+    - failure count
+    - retry count
+
+A model should not be evaluated only on raw inference speed.
+
+Measure actual end-to-end production speed.
+
+
+======================================================================
+39. GPU PERFORMANCE REPORT
+======================================================================
+
+Example structure:
+
+    GPU 0
+        Utilization:  96%
+        VRAM:         18.2 GB
+        Throughput:   49 fps
+
+    GPU 1
+        Utilization:  95%
+        VRAM:         18.0 GB
+        Throughput:   48 fps
+
+    GPU 2
+        Utilization:  97%
+        VRAM:         18.3 GB
+        Throughput:   49 fps
+
+    Decode:
+        180 fps
+
+    VFI:
+        48.7 fps aggregate
+
+    Encode:
+        220 fps
+
+    End-to-end:
+        1.08x realtime
+
+
+======================================================================
+40. REGRESSION BENCHMARK
+======================================================================
+
+Maintain a permanent difficult-segment library.
+
+Example:
+
+    segment_001.mp4
+        tag: wide_static
+
+    segment_002.mp4
+        tag: fast_camera_pan
+
+    segment_003.mp4
+        tag: fast_ball
+
+    segment_004.mp4
+        tag: player_occlusion
+
+    segment_005.mp4
+        tag: penalty_box
+
+    segment_006.mp4
+        tag: goal_net
+
+    segment_007.mp4
+        tag: scoreboard
+
+    segment_008.mp4
+        tag: LED_board
+
+    segment_009.mp4
+        tag: replay
+
+    segment_010.mp4
+        tag: hard_cut
+
+Whenever the model, weights, inference implementation, CUDA environment,
+encoder, chunking logic, or other major pipeline component changes, run
+the full regression suite.
+
+
+======================================================================
+41. MODEL BENCHMARK COMMAND
+======================================================================
+
+The target user experience for comparing models should eventually be:
+
+    upframe benchmark \
+        --source match.mp4 \
+        --models rife,amt,film \
+        --gpus 0,1,2
+
+This should:
+
+    1. run each model with equivalent settings
+    2. generate 50 FPS outputs
+    3. measure performance
+    4. run technical QC
+    5. run temporal QC
+    6. run artifact analysis
+    7. run football-specific QC
+    8. generate a side-by-side report
+
+
+======================================================================
+42. PRODUCTION COMMAND
+======================================================================
+
+The target simple interface:
+
+    upframe input.mp4 output_50fps.mp4
+
+Advanced:
+
+    upframe \
+        --input match.mp4 \
+        --output match_50fps.mp4 \
+        --model rife \
+        --gpus 0,1,2 \
+        --quality broadcast
+
+Future model-routing mode:
+
+    upframe \
+        --input match.mp4 \
+        --output match_50fps.mp4 \
+        --model auto \
+        --gpus 0,1,2
+
+
+======================================================================
+43. RECOMMENDED SOFTWARE ARCHITECTURE
+======================================================================
+
+Suggested repository structure:
+
+    upframe/
+    |
+    +-- cli/
+    |   +-- upframe.py
+    |
+    +-- pipeline/
+    |   +-- probe.py
+    |   +-- source_qc.py
+    |   +-- scene_detect.py
+    |   +-- scheduler.py
+    |   +-- decode.py
+    |   +-- timestamps.py
+    |   +-- merge.py
+    |   +-- encode.py
+    |   +-- qc.py
+    |
+    +-- models/
+    |   +-- base.py
+    |   +-- rife.py
+    |   +-- amt.py
+    |   +-- film.py
+    |   +-- ifrnet.py
+    |
+    +-- evaluation/
+    |   +-- technical.py
+    |   +-- temporal.py
+    |   +-- artifacts.py
+    |   +-- football.py
+    |   +-- perceptual.py
+    |   +-- performance.py
+    |   +-- report.py
+    |
+    +-- workers/
+    |   +-- gpu_worker.py
+    |
+    +-- configs/
+    |   +-- football_25_to_50.yaml
+    |
+    +-- docker/
+    |   +-- Dockerfile
+    |
+    +-- tests/
+
+
+======================================================================
+44. DOCKER / REPRODUCIBILITY
+======================================================================
+
+Package the system as a reproducible container.
+
+Container should contain:
+
+    - compatible CUDA runtime
+    - PyTorch
+    - FFmpeg
+    - VFI repository dependencies
+    - pretrained model weights
+    - pipeline code
+    - evaluation tools
+
+Host:
+
+    Docker
+        |
+        +-- GPU 0
+        +-- GPU 1
+        +-- GPU 2
+
+The exact compatible CUDA/PyTorch versions depend on the selected model
+repositories and deployment environment and should be pinned in the
+container.
+
+
+======================================================================
+45. CRASH RECOVERY
+======================================================================
+
+Long matches require fault tolerance.
+
+Track for every chunk:
+
+    - chunk ID
+    - source frame range
+    - assigned GPU
+    - start time
+    - end time
+    - status
+    - output path
+    - checksum/validation status
+    - retry count
+
+Example:
+
+    chunk 0  -> complete
+    chunk 1  -> complete
+    chunk 2  -> failed
+    chunk 3  -> complete
+
+The scheduler should retry chunk 2 without restarting the complete match.
+
+
+======================================================================
+46. OUTPUT ARTIFACTS
+======================================================================
+
+For each production job, generate:
+
+    output/
+        match_50fps.mp4
+        match_50fps.json
+
+The JSON should include:
+
+    - source metadata
+    - output metadata
+    - model
+    - model version
+    - weights
+    - GPU configuration
+    - runtime
+    - RTF
+    - frame count
+    - detected cuts
+    - failures
+    - QC summary
+
+
+======================================================================
+47. EVALUATION ARTIFACT DIRECTORY
+======================================================================
+
+Example:
+
+    evaluation/
+    |
+    +-- report.html
+    +-- report.json
+    +-- metrics.csv
+    |
+    +-- source/
+    |   +-- source_metrics.json
+    |   +-- source_baseline/
+    |
+    +-- injected_frames/
+    |
+    +-- slowmo/
+    |
+    +-- temporal/
+    |   +-- flow/
+    |   +-- motion_metrics.csv
+    |
+    +-- artifacts/
+    |   +-- ghosting/
+    |   +-- double_contour/
+    |   +-- deformation/
+    |   +-- ball/
+    |   +-- player/
+    |   +-- geometry/
+    |   +-- graphics/
+    |
+    +-- suspicious/
+    |   +-- suspicious_timestamps.csv
+    |
+    +-- performance/
+    |   +-- gpu.csv
+    |   +-- runtime.json
+    |
+    +-- logs/
+
+
+======================================================================
+48. EVALUATION REPORT
+======================================================================
+
+The report should be understandable to a person who did not operate the
+pipeline.
+
+Example:
+
+    ========================================================
+                       UPFRAME EVALUATION
+    ========================================================
+
+    INPUT
+    --------------------------------------------------------
+    File:              match.mp4
+    Resolution:        1920x1080
+    Source FPS:        25.019
+    Duration:          90:00
+    Codec:             H.264
+
+    OUTPUT
+    --------------------------------------------------------
+    File:              match_50fps.mp4
+    Resolution:        1920x1080
+    Output FPS:        50
+    Duration:          90:00
+
+    MODEL
+    --------------------------------------------------------
+    Model:             AMT-S
+    GPUs:              0,1,2
+
+    TECHNICAL INTEGRITY
+    --------------------------------------------------------
+    Frame preservation: PASS
+    PTS integrity:      PASS
+    A/V sync:           PASS
+    Scene-cut handling: PASS
+    Dropped frames:     0
+    Duplicate frames:   0
+
+    TEMPORAL QUALITY
+    --------------------------------------------------------
+    Motion consistency:   ...
+    Flow consistency:     ...
+    Temporal stability:   ...
+
+    FOOTBALL QUALITY
+    --------------------------------------------------------
+    Player integrity:    4.4 / 5
+    Ball integrity:      4.1 / 5
+    Occlusion:            4.0 / 5
+    Pitch geometry:      4.5 / 5
+    Goal/net:             4.2 / 5
+    Graphics:             4.7 / 5
+
+    ADDED ARTIFACTS
+    --------------------------------------------------------
+    Added ghosting:      ...
+    Added deformation:   ...
+    Added ball errors:   ...
+    Added geometry:      ...
+    Added flicker:       ...
+
+    PERFORMANCE
+    --------------------------------------------------------
+    Runtime:             98:00
+    RTF:                 1.09x
+    GPU utilization:     92%
+    Peak VRAM:           ...
+
+    FINAL
+    --------------------------------------------------------
+    Technical:           PASS
+    Quality:             GOOD
+    Performance:         PASS
+    Recommendation:      PRODUCTION CANDIDATE
+
+
+======================================================================
+49. QUALITY SCORE DESIGN
+======================================================================
+
+A recommended production score should combine several dimensions.
+
+Example starting point:
+
+    Player integrity          15%
+    Ball integrity            15%
+    Temporal stability        15%
+    Occlusion handling        10%
+    Camera motion             10%
+    Pitch geometry             5%
+    Broadcast graphics       10%
+    Goal/net/thin objects      5%
+    Human overall MOS         15%
+
+This is an initial framework, not a universal standard.
+
+The weights should be calibrated after collecting benchmark results.
+
+Important:
+
+    Do not allow a tiny PSNR improvement to outweigh a severe ball
+    duplication problem.
+
+
+======================================================================
+50. PERFORMANCE SCORE DESIGN
+======================================================================
+
+Keep performance separate from visual quality.
+
+Example:
+
+    Quality score:       8.8 / 10
+    Performance score:  9.1 / 10
+
+Performance dimensions:
+
+    - realtime factor
+    - throughput
+    - GPU utilization
+    - VRAM
+    - decode overhead
+    - encode overhead
+    - scheduler idle time
+    - failures/retries
+
+
+======================================================================
+51. MODEL SELECTION PROCESS
+======================================================================
+
+Use this process:
+
+STEP 1:
+    Run technical validation.
+
+STEP 2:
+    Reject models/pipelines that fail basic correctness.
+
+STEP 3:
+    Measure end-to-end performance.
+
+STEP 4:
+    Run temporal quality analysis.
+
+STEP 5:
+    Run source-vs-output artifact analysis.
+
+STEP 6:
+    Run football-specific evaluation.
+
+STEP 7:
+    Review suspicious timestamps.
+
+STEP 8:
+    Run human A/B or pairwise preference testing.
+
+STEP 9:
+    Compare all results together.
+
+Final question:
+
+    Which model gives the best football output while meeting the
+    1.0-1.3x turnaround requirement?
+
+
+======================================================================
+52. WHAT NOT TO DO
+======================================================================
+
+Do NOT:
+
+    - select a model based only on PSNR
+    - select a model based only on VMAF
+    - compare 50 FPS output directly to a 25 FPS reference as if every
+      frame should be identical
+    - blame pre-existing source artifacts on VFI
+    - evaluate only individual frames
+    - ignore temporal flicker
+    - ignore player/ball behavior
+    - interpolate across hard cuts
+    - alter original frames unnecessarily
+    - introduce super-resolution by default
+    - add diffusion/generative VFI unless a specific need is established
+    - make training/fine-tuning part of the basic production plan
+    - benchmark models with different encoding settings and call it a
+      model-quality comparison
+
+
+======================================================================
+53. WHY SUPPLIED FOOTBALL CLIPS MATTER
+======================================================================
+
+Generic VFI benchmark datasets are useful for research, but the final
+decision should be driven by the actual target content.
+
+The supplied football clips are important because they contain:
+
+    - broadcast camera motion
+    - multiple moving players
+    - small ball
+    - pitch geometry
+    - broadcast overlays
+    - LED boards
+    - crowd
+    - compression
+    - real-world motion blur
+    - real football-specific occlusion
+
+These clips should become part of the permanent regression suite.
+
+
+======================================================================
+54. RECOMMENDED V1 IMPLEMENTATION
+======================================================================
+
+Do not implement every advanced feature at once.
+
+V1 should contain:
+
+    1. FFmpeg/ffprobe source probing
+    2. input validation
+    3. scene-cut detection
+    4. chunk scheduler
+    5. 3 GPU workers
+    6. one VFI model adapter, starting with RIFE
+    7. timestamp-aware merge
+    8. 50 FPS output encoding
+    9. audio preservation
+   10. basic technical QC
+   11. source-frame preservation test
+   12. runtime/GPU metrics
+   13. generated-frame extraction
+   14. difficult-segment generation
+   15. machine-readable report
+
+Then integrate:
+
+    - AMT-S
+    - FILM
+    - IFRNet
+
+as alternative model adapters.
+
+
+======================================================================
+55. RECOMMENDED V2 EVALUATION
+======================================================================
+
+V2 should add:
+
+    - temporal optical-flow metrics
+    - motion smoothness analysis
+    - temporal flicker analysis
+    - source-vs-output artifact differential
+    - suspicious timestamp ranking
+    - slow-motion replay segment classification
+    - football-specific object tracking
+    - ball trajectory checks
+    - player-region checks
+    - pitch geometry checks
+
+
+======================================================================
+56. RECOMMENDED V3 EVALUATION
+======================================================================
+
+V3 can add:
+
+    - automated ball artifact detection
+    - automated player deformation detection
+    - object trajectory consistency
+    - automatic graphics stability checks
+    - richer HTML dashboards
+    - larger regression datasets
+    - genuine high-FPS ground-truth benchmark set
+    - automatic model ranking
+
+
+======================================================================
+57. FINAL SYSTEM INTERFACE
+
+Production user:
+
+    upframe match.mp4 match_50fps.mp4
+
+Model benchmark:
+
+    upframe benchmark \
+        --source match.mp4 \
+        --models rife,amt,film \
+        --gpus 0,1,2
+
+Evaluation:
+
+    upframe eval \
+        --source match.mp4 \
+        --output match_50fps.mp4
+
+Probe:
+
+    upframe probe match.mp4
+
+
+======================================================================
+58. FINAL CONCEPTUAL ARCHITECTURE
+======================================================================
+
+                         +----------------+
+                         |   INPUT VIDEO  |
+                         +--------+-------+
+                                  |
+                                  v
+                         +----------------+
+                         | PROBE / SOURCE  |
+                         | ANALYSIS        |
+                         +--------+-------+
+                                  |
+                                  v
+                         +----------------+
+                         | SCENE / CUT     |
+                         | DETECTION       |
+                         +--------+-------+
+                                  |
+                                  v
+                         +----------------+
+                         | CHUNK SCHEDULER |
+                         +--------+-------+
+                                  |
+                 +----------------+----------------+
+                 |                |                |
+                 v                v                v
+              GPU 0            GPU 1            GPU 2
+             VFI worker       VFI worker       VFI worker
+                 |                |                |
+                 +----------------+----------------+
+                                  |
+                                  v
+                         +----------------+
+                         | MERGE + PTS    |
+                         +--------+-------+
+                                  |
+                                  v
+                         +----------------+
+                         | ENCODE + AUDIO  |
+                         +--------+-------+
+                                  |
+                                  v
+                         +----------------+
+                         | 50 FPS OUTPUT   |
+                         +--------+-------+
+                                  |
+                                  v
+                    +----------------------------+
+                    |       EVALUATION           |
+                    +-------------+--------------+
+                                  |
+             +--------------------+--------------------+
+             |                    |                    |
+             v                    v                    v
+       Technical QC         Temporal QC          Artifact QC
+             |                    |                    |
+             +--------------------+--------------------+
+                                  |
+                                  v
+                          Football-specific QC
+                                  |
+                                  v
+                           Human review
+                                  |
+                                  v
+                         Performance analysis
+                                  |
+                                  v
+                           FINAL REPORT
+
+
+======================================================================
+59. FINAL DEFINITION
+======================================================================
+
+The project is a production-oriented, Dockerized, multi-GPU system that
+takes approximately 25 FPS 1080p football broadcast video and converts it
+to 50 FPS by generating one intermediate frame between every pair of
+source frames.
+
+It uses existing pretrained VFI models rather than training new models.
+
+The system runs across 3 x NVIDIA L40S GPUs and targets approximately
+1.0x-1.3x source duration for end-to-end processing.
+
+The evaluation system does not rely on one metric.
+
+It separately evaluates:
+
+    TECHNICAL CORRECTNESS
+        Did the pipeline correctly produce the requested video?
+
+    TEMPORAL QUALITY
+        Is the generated motion smooth and temporally consistent?
+
+    ARTIFACT BEHAVIOR
+        Did VFI introduce or amplify ghosting, deformation, object
+        duplication, flicker, or other artifacts?
+
+    FOOTBALL QUALITY
+        Are the ball, players, occlusions, pitch, goals, graphics, and
+        camera motion handled correctly?
+
+    PERCEPTUAL QUALITY
+        Do humans consider the video natural and preferable?
+
+    PERFORMANCE
+        Does the full system meet the 1.0-1.3x processing target and
+        use the three L40S GPUs effectively?
+
+The most important evaluation principle is:
+
+    Do not ask only:
+        "Does the output contain an artifact?"
+
+    Ask:
+        "Was the artifact already present in the source, and if not,
+         how much did the VFI system introduce?"
+
+The ultimate production criterion is:
+
+    Produce a 50 FPS football video that looks materially smoother than
+    the 25 FPS source, preserves the original content, introduces as few
+    new artifacts as possible, remains temporally stable, handles
+    football-specific motion correctly, and can be processed reliably
+    within approximately 1.0-1.3x source duration on 3 x L40S GPUs.
+
+
+======================================================================
+END OF SPECIFICATION
+======================================================================
