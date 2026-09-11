@@ -1,6 +1,8 @@
 """RIFE (Real-Time Intermediate Flow Estimation) model adapter for production upframing."""
 
 import logging
+import os
+import sys
 from typing import Any, Optional, Union
 import numpy as np
 import torch
@@ -107,6 +109,7 @@ class RIFEModel(BaseVFIModel):
     def __init__(self) -> None:
         super().__init__(name="rife")
         self.net: Optional[nn.Module] = None
+        self.rife_model: Optional[Any] = None
         self.half_precision = False
 
     def load(
@@ -123,12 +126,22 @@ class RIFEModel(BaseVFIModel):
         else:
             self.device = torch.device(device)
 
-        self.net = IFNet().to(self.device)
-
         resolved_path = resolve_checkpoint("rife", checkpoint_path)
+        rife_dir = os.path.abspath("backbones/rife") if os.path.exists("backbones/rife") else os.path.abspath("rife")
+
+        loaded = False
         if resolved_path:
             logger.info(f"Loading RIFE weights from: {resolved_path}")
+            checkpoint_dir = os.path.dirname(resolved_path)
+            parent_dir = os.path.dirname(checkpoint_dir)
+            for d in [parent_dir, rife_dir]:
+                if os.path.exists(d) and d not in sys.path:
+                    sys.path.insert(0, d)
+
+            # Strategy 1: Try Practical-RIFE backbone wrapper if RIFE_HDv3 is present
             try:
+                from train_log.RIFE_HDv3 import Model as PracticalRIFEModel
+                pr_model = PracticalRIFEModel()
                 try:
                     ckpt = torch.load(resolved_path, map_location=self.device, weights_only=False)
                 except TypeError:
@@ -140,17 +153,44 @@ class RIFEModel(BaseVFIModel):
                     if name.startswith("flownet."):
                         name = name[len("flownet."):]
                     clean_state[name] = v
-                self.net.load_state_dict(clean_state, strict=False)
-                logger.info("Successfully loaded RIFE weights.")
+                pr_model.flownet.load_state_dict(clean_state, strict=False)
+                pr_model.flownet.to(self.device)
+                self.rife_model = pr_model
+                self.net = pr_model.flownet
+                loaded = True
+                logger.info("Successfully loaded Practical-RIFE weights into RIFE_HDv3 model.")
             except Exception as e:
-                logger.warning(f"Failed to load weights from {resolved_path}: {e}. Using initialized weights.")
-        else:
-            logger.warning("No RIFE checkpoint specified or found. Using initialized network.")
+                logger.debug(f"Practical-RIFE backbone load skipped: {e}")
 
-        self.net.eval()
-        if fp16 and self.device.type == "cuda":
-            self.net.half()
-            self.half_precision = True
+        # Strategy 2: Fall back to standalone IFNet
+        if not loaded:
+            self.net = IFNet().to(self.device)
+            if resolved_path:
+                try:
+                    try:
+                        ckpt = torch.load(resolved_path, map_location=self.device, weights_only=False)
+                    except TypeError:
+                        ckpt = torch.load(resolved_path, map_location=self.device)
+                    state_dict = ckpt["state_dict"] if isinstance(ckpt, dict) and "state_dict" in ckpt else ckpt
+                    clean_state = {}
+                    for k, v in state_dict.items():
+                        name = k.replace("module.", "")
+                        if name.startswith("flownet."):
+                            name = name[len("flownet."):]
+                        clean_state[name] = v
+                    self.net.load_state_dict(clean_state, strict=False)
+                    logger.info("Successfully loaded RIFE weights into standalone IFNet.")
+                    loaded = True
+                except Exception as e:
+                    logger.warning(f"Failed to load weights from {resolved_path}: {e}. Using initialized weights.")
+            else:
+                logger.warning("No RIFE checkpoint specified or found. Using initialized network.")
+
+        if self.net is not None:
+            self.net.eval()
+            if fp16 and self.device.type == "cuda":
+                self.net.half()
+                self.half_precision = True
 
         self.is_loaded = True
 
@@ -175,12 +215,18 @@ class RIFEModel(BaseVFIModel):
                 tb = tb.half()
 
         orig_h, orig_w = ta.shape[-2:]
-        ta, _ = pad_to_multiple(ta, multiple=32)
-        tb, _ = pad_to_multiple(tb, multiple=32)
+        pad_mult = 64 if self.rife_model is not None else 32
+        ta, _ = pad_to_multiple(ta, multiple=pad_mult)
+        tb, _ = pad_to_multiple(tb, multiple=pad_mult)
 
         with torch.no_grad():
-            x = torch.cat([ta, tb], dim=1)
-            pred = self.net(x, timestep=0.5)
+            if self.rife_model is not None:
+                scale = kwargs.get("scale", 1.0)
+                timestep = kwargs.get("timestep", 0.5)
+                pred = self.rife_model.inference(ta, tb, timestep=timestep, scale=scale)
+            else:
+                x = torch.cat([ta, tb], dim=1)
+                pred = self.net(x, timestep=kwargs.get("timestep", 0.5))
 
         pred = unpad(pred, orig_h, orig_w)
 
@@ -204,11 +250,17 @@ class RIFEModel(BaseVFIModel):
             batch_b = batch_b.half()
 
         orig_h, orig_w = batch_a.shape[-2:]
-        batch_a, _ = pad_to_multiple(batch_a, multiple=32)
-        batch_b, _ = pad_to_multiple(batch_b, multiple=32)
+        pad_mult = 64 if self.rife_model is not None else 32
+        batch_a, _ = pad_to_multiple(batch_a, multiple=pad_mult)
+        batch_b, _ = pad_to_multiple(batch_b, multiple=pad_mult)
 
         with torch.no_grad():
-            x = torch.cat([batch_a, batch_b], dim=1)
-            pred = self.net(x, timestep=0.5)
+            if self.rife_model is not None:
+                scale = kwargs.get("scale", 1.0)
+                timestep = kwargs.get("timestep", 0.5)
+                pred = self.rife_model.inference(batch_a, batch_b, timestep=timestep, scale=scale)
+            else:
+                x = torch.cat([batch_a, batch_b], dim=1)
+                pred = self.net(x, timestep=kwargs.get("timestep", 0.5))
 
         return unpad(pred, orig_h, orig_w)

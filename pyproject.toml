@@ -19,3 +19,7 @@ dependencies = [
 
 [project.scripts]
 upframe = "upframe.cli.upframe:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["backbones", ".upframe_tmp_*", "rife_temp"]

@@ -3,3 +3,5 @@
 .upframe_tmp_dummy_out
 *.egg-info
 tests/
+__pycache__
+*temp*/
