@@ -140,6 +140,13 @@ class RIFEModel(BaseVFIModel):
 
             # Strategy 1: Try Practical-RIFE backbone wrapper if RIFE_HDv3 is present
             try:
+                try:
+                    import model.warplayer
+                    from upframe.utils.tensor import warp as upframe_warp
+                    model.warplayer.warp = upframe_warp
+                except Exception:
+                    pass
+
                 from train_log.RIFE_HDv3 import Model as PracticalRIFEModel
                 pr_model = PracticalRIFEModel()
                 try:
