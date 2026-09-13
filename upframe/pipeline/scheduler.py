@@ -36,7 +36,8 @@ class PipelineScheduler:
         use_nvenc: Optional[bool] = None,
         max_retries: int = 3,
         resume: bool = False,
-        fp16: bool = True
+        fp16: bool = True,
+        log_dir: str = "upframe_log"
     ) -> None:
         self.metadata = metadata
         self.output_filepath = os.path.abspath(output_filepath)
@@ -50,12 +51,15 @@ class PipelineScheduler:
         self.max_retries = max_retries
         self.resume = resume
         self.fp16 = fp16
+        self.log_dir = log_dir or "upframe_log"
+
+        output_stem = os.path.splitext(os.path.basename(self.output_filepath))[0]
 
         # Setup working temp directory
         if temp_dir is None:
             self.temp_dir = os.path.join(
-                os.path.dirname(self.output_filepath),
-                f".upframe_tmp_{os.path.splitext(os.path.basename(self.output_filepath))[0]}"
+                self.log_dir,
+                f".upframe_tmp_{output_stem}"
             )
         else:
             self.temp_dir = os.path.abspath(temp_dir)
@@ -169,10 +173,18 @@ class PipelineScheduler:
             use_nvenc=self.use_nvenc
         )
         encoder.start()
-
-        merger = ChunkMerger(width=self.metadata.width, height=self.metadata.height)
-        total_encoded_frames = merger.stream_merge_chunk_files(chunk_files, encoder, fps=50.0)
-        encoder.finish()
+        try:
+            merger = ChunkMerger(width=self.metadata.width, height=self.metadata.height)
+            total_encoded_frames = merger.stream_merge_chunk_files(chunk_files, encoder, fps=50.0)
+            encoder.finish()
+        except Exception:
+            if encoder.proc is not None:
+                try:
+                    encoder.proc.kill()
+                    encoder.proc.wait(timeout=2)
+                except Exception:
+                    pass
+            raise
 
         # Step 3: Reporting & Summary
         total_proc_time = time.time() - start_time
@@ -202,11 +214,25 @@ class PipelineScheduler:
             validation_passed=True
         )
 
-        report_text_path = os.path.splitext(self.output_filepath)[0] + "_report.txt"
-        report_json_path = os.path.splitext(self.output_filepath)[0] + "_report.json"
+        os.makedirs(self.log_dir, exist_ok=True)
+        output_stem = os.path.splitext(os.path.basename(self.output_filepath))[0]
+        report_str = report.render_text()
+        report_dict = report.to_dict()
+
+        report_text_path = os.path.join(self.log_dir, f"{output_stem}_report.txt")
+        report_json_path = os.path.join(self.log_dir, f"{output_stem}_report.json")
         with open(report_text_path, "w") as f:
-            f.write(report.render_text())
+            f.write(report_str)
         with open(report_json_path, "w") as f:
-            json.dump(report.to_dict(), f, indent=2)
+            json.dump(report_dict, f, indent=2)
+
+        canonical_txt = os.path.join(self.log_dir, "report.txt")
+        canonical_json = os.path.join(self.log_dir, "report.json")
+        if canonical_txt != report_text_path:
+            with open(canonical_txt, "w") as f:
+                f.write(report_str)
+        if canonical_json != report_json_path:
+            with open(canonical_json, "w") as f:
+                json.dump(report_dict, f, indent=2)
 
         return report

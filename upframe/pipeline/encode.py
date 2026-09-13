@@ -37,10 +37,19 @@ class VideoEncoder:
         self.frame_bytes = width * height * 3
         self.bitrate = bitrate
 
-        if use_nvenc is None:
+        if use_nvenc is True:
+            if not is_nvenc_available(self.ffmpeg_bin):
+                logger.warning(
+                    f"NVIDIA NVENC requested, but 'h264_nvenc' is not supported by '{self.ffmpeg_bin}'. "
+                    "Falling back to software encoder (libx264)."
+                )
+                self.use_nvenc = False
+            else:
+                self.use_nvenc = True
+        elif use_nvenc is None:
             self.use_nvenc = is_nvenc_available(self.ffmpeg_bin)
         else:
-            self.use_nvenc = use_nvenc
+            self.use_nvenc = False
 
         self.proc: Optional[subprocess.Popen] = None
 
@@ -109,10 +118,33 @@ class VideoEncoder:
         if self.proc is None or self.proc.stdin is None:
             raise RuntimeError("Encoder has not been started.")
 
+        if self.proc.poll() is not None:
+            stderr_msg = ""
+            if self.proc.stderr:
+                try:
+                    stderr_msg = self.proc.stderr.read().decode("utf-8", errors="replace")
+                except Exception:
+                    pass
+            raise RuntimeError(
+                f"FFmpeg process terminated unexpectedly with exit code {self.proc.returncode}: {stderr_msg.strip()}"
+            )
+
         if frame.dtype != np.uint8:
             frame = (np.clip(frame, 0.0, 1.0) * 255.0).astype(np.uint8)
 
-        self.proc.stdin.write(frame.tobytes())
+        try:
+            self.proc.stdin.write(frame.tobytes())
+        except (BrokenPipeError, IOError, OSError) as e:
+            stderr_msg = ""
+            if self.proc.stderr:
+                try:
+                    stderr_msg = self.proc.stderr.read().decode("utf-8", errors="replace")
+                except Exception:
+                    pass
+            ret = self.proc.poll()
+            raise RuntimeError(
+                f"FFmpeg encoding pipe broken (exit code {ret}): {stderr_msg.strip() or str(e)}"
+            ) from e
 
     def finish(self) -> None:
         """Closes the encoder pipe and waits for FFmpeg to finalize the container."""

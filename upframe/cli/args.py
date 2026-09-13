@@ -47,9 +47,31 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default=None, help="Path to YAML configuration file")
     parser.add_argument("--fp16", dest="fp16", action="store_true", default=True, help="Enable FP16 inference")
     parser.add_argument("--no-fp16", dest="fp16", action="store_false", help="Disable FP16 inference")
-    parser.add_argument("--log-file", default=None, help="Path to write execution log file (default: <output>.log)")
+    parser.add_argument("--log-dir", default="upframe_log", help="Directory for execution log files (default: upframe_log)")
+    parser.add_argument("--log-file", default=None, help="Path to write execution log file (default: upframe_log/<output_name>.log)")
 
     return parser
+
+
+def resolve_log_folder(base_log_dir: str, input_path: str, output_path: str, model_name: str) -> str:
+    """Computes run-specific log directory: <base_log_dir>/<video_name>_<model>."""
+    input_stem = os.path.splitext(os.path.basename(input_path))[0]
+    output_stem = os.path.splitext(os.path.basename(output_path))[0]
+
+    if input_stem.lower() in ("input", "in", "video") and output_stem.lower() not in ("output", "out"):
+        chosen_stem = output_stem
+    else:
+        chosen_stem = input_stem
+
+    model_suffix = model_name.lower().replace("-", "_")
+    if chosen_stem.lower().endswith(f"_{model_suffix}"):
+        folder_name = chosen_stem
+    else:
+        folder_name = f"{chosen_stem}_{model_suffix}"
+
+    if os.path.basename(os.path.normpath(base_log_dir)) == folder_name:
+        return base_log_dir
+    return os.path.join(base_log_dir, folder_name)
 
 
 def parse_cli_args(args_list: Optional[List[str]] = None) -> Tuple[str, str, PipelineConfig]:
@@ -88,6 +110,16 @@ def parse_cli_args(args_list: Optional[List[str]] = None) -> Tuple[str, str, Pip
     if args.gpus:
         config.gpus = parse_gpus(args.gpus)
     config.fp16 = args.fp16
-    config.log_file = args.log_file or f"{os.path.splitext(output_path)[0]}.log"
+    if args.log_dir != "upframe_log" or not args.config:
+        config.log_dir = args.log_dir
+
+    base_log_dir = config.log_dir or "upframe_log"
+    config.log_dir = resolve_log_folder(base_log_dir, input_path, output_path, config.model)
+    folder_name = os.path.basename(config.log_dir)
+
+    if args.log_file:
+        config.log_file = args.log_file
+    elif not config.log_file:
+        config.log_file = os.path.join(config.log_dir, f"{folder_name}.log")
 
     return input_path, output_path, config

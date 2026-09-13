@@ -25,3 +25,6 @@ bitrate: "14M"
 
 # Audio handling
 audio: "copy"  # Stream copy original AAC audio
+
+# Logging
+log_dir: "upframe_log"

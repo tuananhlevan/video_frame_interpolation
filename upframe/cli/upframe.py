@@ -60,7 +60,8 @@ def main() -> int:
         use_nvenc=config.use_nvenc,
         resume=config.resume,
         fp16=config.fp16,
-        max_retries=config.max_retries
+        max_retries=config.max_retries,
+        log_dir=config.log_dir
     )
 
     try:

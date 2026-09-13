@@ -1,6 +1,7 @@
 *.mp4
 .*
 strats/
+upframe_log
 evaluation_log
 !.gitignore
 *.egg-info

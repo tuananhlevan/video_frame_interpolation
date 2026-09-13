@@ -73,5 +73,3 @@ dependencies:
       - tqdm==4.70.0
       - triton==3.8.0
       - typing-extensions==4.16.0
-      - upframe==1.0.0
-prefix: /home/levantuananh/miniconda3/envs/vfi
