@@ -1,7 +1,8 @@
 *.mp4
-.pytest_cache
-.upframe_tmp_dummy_out
+.*
+strats/
+eval_*
+!.gitignore
 *.egg-info
 tests/
 __pycache__
-*temp*/
