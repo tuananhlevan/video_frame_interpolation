@@ -77,10 +77,37 @@ class EvaluationPipeline:
         processing_time_sec: Optional[float] = None
     ) -> EvaluationReport:
         """Executes full evaluation between source and output video."""
-        eval_dir = eval_dir or self.config.eval_dir
+        if eval_dir is None or eval_dir in ("evaluation", "evaluation_log"):
+            output_stem = os.path.splitext(os.path.basename(output_path))[0]
+            eval_dir = os.path.join(self.config.eval_dir, output_stem)
+        elif not os.path.isabs(eval_dir) and not eval_dir.startswith(self.config.eval_dir) and not eval_dir.startswith("./"):
+            eval_dir = os.path.join(self.config.eval_dir, eval_dir)
+
         os.makedirs(eval_dir, exist_ok=True)
         t_start = time.perf_counter()
 
+        # Attach file logging to evaluation.log inside the target evaluation folder
+        log_file = os.path.join(eval_dir, "evaluation.log")
+        file_handler = logging.FileHandler(log_file, mode="a", encoding="utf-8")
+        file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S"))
+        root_logger = logging.getLogger()
+        root_logger.addHandler(file_handler)
+
+        try:
+            return self._do_evaluate(source_path, output_path, eval_dir, model_name, processing_time_sec, t_start)
+        finally:
+            root_logger.removeHandler(file_handler)
+            file_handler.close()
+
+    def _do_evaluate(
+        self,
+        source_path: str,
+        output_path: str,
+        eval_dir: str,
+        model_name: str,
+        processing_time_sec: Optional[float],
+        t_start: float
+    ) -> EvaluationReport:
         logger.info(f"Starting UPFRAME evaluation: {source_path} vs {output_path}")
 
         # 1. Probing videos
@@ -273,7 +300,7 @@ class EvaluationPipeline:
             eval_dir=eval_dir
         )
 
-        logger.info("Generating report files (JSON, CSV, HTML)...")
+        logger.info("Generating report files (JSON, CSV, HTML, TXT)...")
         generate_evaluation_reports(report, eval_dir, frame_metrics=frame_metrics)
 
         logger.info(f"UPFRAME evaluation completed successfully! Reports saved in: {eval_dir}")

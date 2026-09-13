@@ -57,7 +57,7 @@ class PerformanceThresholds:
 @dataclass
 class EvaluationConfig:
     """Master evaluation configuration."""
-    eval_dir: str = "evaluation"
+    eval_dir: str = "evaluation_log"
     sample_stride: int = 1  # 1 = full evaluation, N = subsample every Nth interval
     max_frames: Optional[int] = None  # limit frames evaluated (for quick benchmarking)
     device: str = "cuda" if torch.cuda.is_available() else "cpu"

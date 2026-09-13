@@ -39,9 +39,15 @@ def generate_evaluation_reports(
     suspicious_csv_path = os.path.join(suspicious_dir, "suspicious_timestamps.csv")
     export_suspicious_moments_csv(report.suspicious_moments, suspicious_csv_path)
 
+    # Text summary
+    summary_path = os.path.join(eval_dir, "summary.txt")
+    with open(summary_path, "w", encoding="utf-8") as f:
+        f.write(report.render_summary_text() + "\n")
+
     return {
         "json": json_path,
         "html": html_path,
         "csv": csv_path,
-        "suspicious_csv": suspicious_csv_path
+        "suspicious_csv": suspicious_csv_path,
+        "summary": summary_path
     }

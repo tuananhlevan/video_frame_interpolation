@@ -1,7 +1,7 @@
 *.mp4
 .*
 strats/
-eval_*
+evaluation_log
 !.gitignore
 *.egg-info
 tests/
