@@ -31,17 +31,42 @@ def compute_production_scorecard(
     temporal_stability_1_to_5 = max(1.0, temporal_stability_1_to_5 - min(2.0, temporal_qc.temporal_flicker_score * 0.5))
 
     # Weighted sum on 1-5 scale
-    weighted_1_to_5 = (
-        weights.player_integrity * football_qc.player_integrity_score +
-        weights.ball_integrity * football_qc.ball_integrity_score +
-        weights.temporal_stability * temporal_stability_1_to_5 +
-        weights.occlusion_handling * football_qc.occlusion_handling_score +
-        weights.camera_motion * football_qc.camera_motion_score +
-        weights.pitch_geometry * football_qc.pitch_geometry_score +
-        weights.broadcast_graphics * football_qc.broadcast_graphics_score +
-        weights.goal_net * football_qc.goal_net_score +
-        weights.human_mos * perceptual_qc.overall_quality_mos
-    )
+    has_human_survey = (perceptual_qc.survey_responses_count > 0)
+    if has_human_survey:
+        weighted_1_to_5 = (
+            weights.player_integrity * football_qc.player_integrity_score +
+            weights.ball_integrity * football_qc.ball_integrity_score +
+            weights.temporal_stability * temporal_stability_1_to_5 +
+            weights.occlusion_handling * football_qc.occlusion_handling_score +
+            weights.camera_motion * football_qc.camera_motion_score +
+            weights.pitch_geometry * football_qc.pitch_geometry_score +
+            weights.broadcast_graphics * football_qc.broadcast_graphics_score +
+            weights.goal_net * football_qc.goal_net_score +
+            weights.human_mos * perceptual_qc.overall_quality_mos
+        )
+    else:
+        # Eliminate circular double-counting: re-normalize remaining objective weights to sum to 1.0
+        objective_weight_sum = (
+            weights.player_integrity +
+            weights.ball_integrity +
+            weights.temporal_stability +
+            weights.occlusion_handling +
+            weights.camera_motion +
+            weights.pitch_geometry +
+            weights.broadcast_graphics +
+            weights.goal_net
+        )
+        norm = 1.0 / max(1e-5, objective_weight_sum)
+        weighted_1_to_5 = (
+            (weights.player_integrity * norm) * football_qc.player_integrity_score +
+            (weights.ball_integrity * norm) * football_qc.ball_integrity_score +
+            (weights.temporal_stability * norm) * temporal_stability_1_to_5 +
+            (weights.occlusion_handling * norm) * football_qc.occlusion_handling_score +
+            (weights.camera_motion * norm) * football_qc.camera_motion_score +
+            (weights.pitch_geometry * norm) * football_qc.pitch_geometry_score +
+            (weights.broadcast_graphics * norm) * football_qc.broadcast_graphics_score +
+            (weights.goal_net * norm) * football_qc.goal_net_score
+        )
 
     # Scale 1-5 to 0-10 Quality Score
     quality_score = round(float(weighted_1_to_5 * 2.0), 2)

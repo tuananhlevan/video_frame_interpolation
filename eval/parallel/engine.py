@@ -24,6 +24,7 @@ from eval.layer2_temporal.optical_flow import evaluate_optical_flow_consistency
 from eval.layer2_temporal.smoothness import compute_frame_motion_vector
 from eval.layer3_football.artifacts import measure_frame_artifacts
 from eval.layer3_football.ball import detect_ball_candidates, get_pitch_coverage
+from eval.layer3_football.goal_net import detect_goal_candidate_roi
 from eval.layer3_football.pitch_geometry import extract_pitch_lines
 from eval.layer3_football.player_occlusion import detect_player_blobs
 from eval.types import (
@@ -104,8 +105,14 @@ class ChunkEvaluationOutput:
     wobble_events: int = 0
     line_counts_per_frame: List[int] = field(default_factory=list)
     laplacian_variances: List[float] = field(default_factory=list)
+    goal_candidate_rois: List[Tuple[int, int, int, int]] = field(default_factory=list)
     diffs_tl: List[float] = field(default_factory=list)
     diffs_tr: List[float] = field(default_factory=list)
+    edge_acc_tl: Optional[np.ndarray] = None
+    edge_acc_tr: Optional[np.ndarray] = None
+    edge_samples_tl: int = 0
+    edge_samples_tr: int = 0
+    temporal_residuals: List[float] = field(default_factory=list)
     pitch_coverage_samples: List[float] = field(default_factory=list)
     src_ball_detected_count: int = 0
     error: Optional[str] = None
@@ -129,8 +136,12 @@ def evaluate_chunk_worker(task: ChunkEvaluationTask) -> ChunkEvaluationOutput:
     injected_dir = os.path.join(task.eval_dir, "injected_frames")
     diff_dir = os.path.join(task.eval_dir, "diff_maps")
 
-    roi_top_left = (slice(0, int(height * 0.18)), slice(0, int(width * 0.30)))
-    roi_top_right = (slice(0, int(height * 0.15)), slice(int(width * 0.75), int(width * 0.98)))
+    h_tl, w_tl = int(height * 0.18), int(width * 0.30)
+    h_tr, w_tr = int(height * 0.15), int(width * 0.98) - int(width * 0.75)
+    roi_top_left = (slice(0, h_tl), slice(0, w_tl))
+    roi_top_right = (slice(0, h_tr), slice(int(width * 0.75), int(width * 0.98)))
+    out.edge_acc_tl = np.zeros((h_tl, w_tl), dtype=np.float32)
+    out.edge_acc_tr = np.zeros((h_tr, w_tr), dtype=np.float32)
 
     window: deque = deque(maxlen=3)
     gray_window: deque = deque(maxlen=3)
@@ -241,13 +252,20 @@ def evaluate_chunk_worker(task: ChunkEvaluationTask) -> ChunkEvaluationOutput:
                 out.motion_vectors.append((dx, dy, mag))
                 out.shifts.append((dx, dy))
 
+                if raw_out_idx % 10 == 0:
+                    p_tl = gray[roi_top_left]
+                    p_tr = gray[roi_top_right]
+                    if out.edge_acc_tl is not None and p_tl.shape == out.edge_acc_tl.shape:
+                        out.edge_acc_tl += (cv2.Canny(p_tl, 80, 180) > 0).astype(np.float32)
+                        out.edge_samples_tl += 1
+                    if out.edge_acc_tr is not None and p_tr.shape == out.edge_acc_tr.shape:
+                        out.edge_acc_tr += (cv2.Canny(p_tr, 80, 180) > 0).astype(np.float32)
+                        out.edge_samples_tr += 1
+
                 for (ys, xs), diff_list in [(roi_top_left, out.diffs_tl), (roi_top_right, out.diffs_tr)]:
                     patch1 = prev_gray[ys, xs]
                     patch2 = gray[ys, xs]
-                    edges1 = cv2.Canny(patch1, 80, 180)
-                    if np.sum(edges1) > 100:
-                        diff_val = float(np.mean(np.abs(patch1[edges1 > 0].astype(np.float32) - patch2[edges1 > 0].astype(np.float32))))
-                        diff_list.append(diff_val)
+                    diff_list.append(float(np.mean(np.abs(patch1.astype(np.float32) - patch2.astype(np.float32)))))
 
                 g_curr_f = gray.astype(np.float32)
                 g_prev_f = prev_gray.astype(np.float32)
@@ -260,7 +278,10 @@ def evaluate_chunk_worker(task: ChunkEvaluationTask) -> ChunkEvaluationOutput:
                 prev2_gray = gray_window[-2]
                 g_curr_f = gray.astype(np.float32)
                 g_prev2_f = prev2_gray.astype(np.float32)
+                g_prev_f = gray_window[-1].astype(np.float32)
                 out.lag2_diffs.append(float(np.mean(np.abs(g_curr_f - g_prev2_f))))
+                pred_lin = 0.5 * (g_curr_f + g_prev2_f)
+                out.temporal_residuals.append(float(np.mean(np.abs(g_prev_f - pred_lin))))
 
             if len(window) >= 2 and (indices_window[-1] % 2 == 1) and (indices_window[-1] >= task.out_active_start):
                 fa = window[-2]
@@ -303,11 +324,31 @@ def evaluate_chunk_worker(task: ChunkEvaluationTask) -> ChunkEvaluationOutput:
                 if raw_out_idx % 10 == 0:
                     out.pitch_coverage_samples.append(get_pitch_coverage(frame))
 
+                # Pitch Geometry
+                lines = extract_pitch_lines(frame)
+                out.total_lines_detected += len(lines)
+                out.line_counts_per_frame.append(len(lines))
+                if len(lines) >= 2:
+                    angles = [(np.arctan2(y2 - y1, x2 - x1) % np.pi) for x1, y1, x2, y2 in lines]
+                    cl_a = [angles[0]]
+                    cl_b = []
+                    for ang in angles[1:]:
+                        d_a = min(abs(ang - cl_a[0]) % np.pi, np.pi - abs(ang - cl_a[0]) % np.pi)
+                        if d_a < 0.45:
+                            cl_a.append(ang)
+                        elif not cl_b or min(abs(ang - cl_b[0]) % np.pi, np.pi - abs(ang - cl_b[0]) % np.pi) < 0.45:
+                            cl_b.append(ang)
+                        else:
+                            out.wobble_events += 1
+                    for cl in (cl_a, cl_b):
+                        if len(cl) >= 3 and float(np.std(cl)) > 0.35:
+                            out.wobble_events += 1
+
                 # Football checks
                 players = detect_player_blobs(frame)
                 out.total_players_checked += len(players)
 
-                candidates = detect_ball_candidates(frame, players=players, min_circularity=0.50)
+                candidates = detect_ball_candidates(frame, players=players, pitch_lines=lines, min_circularity=0.50)
 
                 best_candidate = None
                 if candidates:
@@ -383,23 +424,28 @@ def evaluate_chunk_worker(task: ChunkEvaluationTask) -> ChunkEvaluationOutput:
                         iy = max(y1, y2)
                         iw = min(x1 + w1, x2 + w2) - ix
                         ih = min(y1 + h1, y2 + h2) - iy
-                        if iw > 5 and ih > 10:
+                        if iw > 8 and ih > 15:
                             out.occlusion_events += 1
                             roi = frame[iy:iy + ih, ix:ix + iw]
                             gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-                            if cv2.Laplacian(gray_roi, cv2.CV_32F).var() < 50.0:
+                            lap_var = float(cv2.Laplacian(gray_roi, cv2.CV_32F).var())
+                            p1_gray = cv2.cvtColor(frame[y1:y1 + h1, x1:x1 + w1], cv2.COLOR_BGR2GRAY)
+                            p2_gray = cv2.cvtColor(frame[y2:y2 + h2, x2:x2 + w2], cv2.COLOR_BGR2GRAY)
+                            ref_texture = float((cv2.Laplacian(p1_gray, cv2.CV_32F).var() + cv2.Laplacian(p2_gray, cv2.CV_32F).var()) / 2.0)
+                            if ref_texture > 65.0 and lap_var < max(25.0, 0.35 * ref_texture):
                                 out.occlusion_failures += 1
 
-                lines = extract_pitch_lines(frame)
-                out.total_lines_detected += len(lines)
-                out.line_counts_per_frame.append(len(lines))
-                if len(lines) >= 2:
-                    angles = [np.arctan2(y2 - y1, x2 - x1) for x1, y1, x2, y2 in lines]
-                    if float(np.std(angles)) > 1.2:
-                        out.wobble_events += 1
+                if raw_out_idx % 25 == 0:
+                    g_roi = detect_goal_candidate_roi(frame)
+                    if g_roi is not None:
+                        out.goal_candidate_rois.append(g_roi)
 
-                _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
-                out.laplacian_variances.append(float(cv2.Laplacian(thresh, cv2.CV_32F).var()))
+                if out.goal_candidate_rois:
+                    gx, gy, gw, gh = out.goal_candidate_rois[-1]
+                    crop = gray[gy:gy + gh, gx:gx + gw]
+                    if crop.size > 0:
+                        _, thresh = cv2.threshold(crop, 200, 255, cv2.THRESH_BINARY)
+                        out.laplacian_variances.append(float(cv2.Laplacian(thresh, cv2.CV_32F).var()))
                 out.out_evaluated_count += 1
 
             window.append(frame)
@@ -603,6 +649,12 @@ class ParallelEvaluationEngine:
         diffs_tr: List[float] = []
         pitch_coverage_samples: List[float] = []
         src_ball_detected_count = 0
+        temporal_residuals: List[float] = []
+        goal_candidate_rois: List[Tuple[int, int, int, int]] = []
+        edge_acc_tl: Optional[np.ndarray] = None
+        edge_acc_tr: Optional[np.ndarray] = None
+        edge_samples_tl = 0
+        edge_samples_tr = 0
 
         for r in results:
             if r.error:
@@ -650,6 +702,20 @@ class ParallelEvaluationEngine:
             diffs_tr.extend(r.diffs_tr)
             pitch_coverage_samples.extend(r.pitch_coverage_samples)
             src_ball_detected_count += r.src_ball_detected_count
+            goal_candidate_rois.extend(r.goal_candidate_rois)
+            temporal_residuals.extend(r.temporal_residuals)
+            edge_samples_tl += r.edge_samples_tl
+            edge_samples_tr += r.edge_samples_tr
+            if r.edge_acc_tl is not None:
+                if edge_acc_tl is None:
+                    edge_acc_tl = r.edge_acc_tl.copy()
+                else:
+                    edge_acc_tl += r.edge_acc_tl
+            if r.edge_acc_tr is not None:
+                if edge_acc_tr is None:
+                    edge_acc_tr = r.edge_acc_tr.copy()
+                else:
+                    edge_acc_tr += r.edge_acc_tr
 
         # -------------------------------------------------------------
         # Layer 1 Technical QC
@@ -728,7 +794,8 @@ class ParallelEvaluationEngine:
                 discontinuity_indices.append(i + 1)
 
         mean_acc = float(np.mean(accelerations)) if accelerations else 0.0
-        discontinuity_penalty = min(0.6, len(discontinuity_indices) * 0.05)
+        discontinuity_rate = len(discontinuity_indices) / float(max(1, len(motion_vectors)))
+        discontinuity_penalty = min(0.6, (discontinuity_rate / 0.02) * 0.6)
         jerk_penalty = min(0.4, mean_acc / 10.0)
         smoothness_score = max(0.0, 1.0 - discontinuity_penalty - jerk_penalty)
 
@@ -742,7 +809,8 @@ class ParallelEvaluationEngine:
                 oscillation_ratios.append(d1_cur / (d2_cur + 1.0))
         mean_oscillation = float(np.mean(oscillation_ratios)) if oscillation_ratios else 1.0
         mean_var_flicker = float(np.mean(var_flickers)) if var_flickers else 0.0
-        flicker_score = float(mean_d1 * 0.1 + mean_var_flicker * 5.0)
+        mean_res = float(np.mean(temporal_residuals)) if temporal_residuals else mean_d1
+        flicker_score = float(mean_res * 0.15 + mean_var_flicker * 3.5)
 
         mean_warp = float(np.mean(warping_errors)) if warping_errors else 0.0
         p95_warp = float(np.percentile(warping_errors, 95)) if warping_errors else 0.0
@@ -779,7 +847,9 @@ class ParallelEvaluationEngine:
             out_double=out_double,
             out_tearing=out_tearing,
             out_deform=out_deform,
-            motion_magnitudes=motion_magnitudes
+            motion_magnitudes=motion_magnitudes,
+            src_flicker=0.0,
+            out_flicker=flicker_score
         )
 
         # -------------------------------------------------------------
@@ -801,9 +871,13 @@ class ParallelEvaluationEngine:
                 dup_rate = duplicate_ball_events / float(tracked_count)
                 tel_rate = teleportation_count / float(tracked_count)
                 deform_rate = deformed_ball_events / float(tracked_count)
-                ball_score = 5.0 - min(2.0, (dup_rate / 0.10) * 2.0) - min(1.5, (tel_rate / 0.10) * 1.5) - min(1.0, (deform_rate / 0.10) * 1.0)
-                if total_eval_frames >= 30 and (tracked_count / float(total_eval_frames)) < 0.15:
-                    ball_score -= min(2.0, (0.15 - (tracked_count / float(total_eval_frames))) / 0.15 * 2.0)
+                ball_score = 5.0 - min(2.0, (dup_rate / 0.15) * 2.0) - min(1.5, (tel_rate / 0.15) * 1.5) - min(1.0, (deform_rate / 0.15) * 1.0)
+                if src_ball_detected_count > 0:
+                    expected_tracked = max(1, src_ball_detected_count * 2)
+                    retention = tracked_count / float(expected_tracked)
+                    if retention < 0.70:
+                        deficit = (0.70 - retention) / 0.70
+                        ball_score -= min(2.0, deficit * 2.0)
                 ball_score = max(1.0, min(5.0, ball_score))
 
         player_score = 5.0
@@ -818,43 +892,85 @@ class ParallelEvaluationEngine:
             occlusion_score -= min(3.5, fail_rate * 5.0)
         occlusion_score = max(1.0, min(5.0, occlusion_score))
 
-        pitch_score = 5.0
-        if total_eval_frames > 0:
-            wobble_rate = wobble_events / float(total_eval_frames)
-            pitch_score -= min(2.5, wobble_rate * 3.0)
-        count_variance = float(np.var(line_counts_per_frame)) if line_counts_per_frame else 0.0
-        pitch_score -= min(1.5, count_variance / 50.0)
-        pitch_score = max(1.0, min(5.0, pitch_score))
+        # Pitch
+        if not scene_has_pitch:
+            pitch_score = 5.0
+        else:
+            pitch_score = 5.0
+            if total_eval_frames > 0:
+                wobble_rate = wobble_events / float(total_eval_frames)
+                pitch_score -= min(2.5, (wobble_rate / 0.10) * 2.5)
+            sudden_line_drops = 0
+            if len(line_counts_per_frame) >= 2:
+                for i in range(1, len(line_counts_per_frame)):
+                    if abs(line_counts_per_frame[i] - line_counts_per_frame[i - 1]) >= 3:
+                        sudden_line_drops += 1
+                drop_rate = sudden_line_drops / float(len(line_counts_per_frame) - 1)
+                pitch_score -= min(1.5, (drop_rate / 0.05) * 1.5)
+            pitch_score = max(1.0, min(5.0, pitch_score))
 
-        goal_score = 4.8
-        if len(laplacian_variances) >= 4:
+        # Goal net (Presence-gated)
+        goal_score = 5.0
+        if goal_candidate_rois and len(laplacian_variances) >= 4:
             even_mean = float(np.mean(laplacian_variances[0::2]))
             odd_mean = float(np.mean(laplacian_variances[1::2]))
             diff_ratio = abs(even_mean - odd_mean) / (even_mean + 1e-5)
             if diff_ratio > 0.20:
                 goal_score -= min(2.5, diff_ratio * 4.0)
-        goal_score = max(1.0, min(5.0, goal_score))
+            goal_score = max(1.0, min(5.0, goal_score))
 
-        mean_diff_tl = float(np.mean(diffs_tl)) if diffs_tl else 0.0
-        mean_diff_tr = float(np.mean(diffs_tr)) if diffs_tr else 0.0
-        graphics_jitter_val = max(mean_diff_tl, mean_diff_tr)
-        graphics_score = max(1.0, min(5.0, 5.0 - (graphics_jitter_val / 20.0)))
+        # Broadcast Graphics (Static Persistence-gated)
+        has_static_graphics = False
+        valid_jitter_diffs: List[float] = []
+        for d_list, edge_acc, n_samples in [
+            (diffs_tl, edge_acc_tl, edge_samples_tl),
+            (diffs_tr, edge_acc_tr, edge_samples_tr)
+        ]:
+            if n_samples >= 5 and edge_acc is not None:
+                mean_edge = edge_acc / float(n_samples)
+                if np.sum(mean_edge >= 0.60) >= 40:
+                    has_static_graphics = True
+                    if d_list:
+                        valid_jitter_diffs.append(float(np.mean(d_list)))
 
-        mean_mag = float(np.mean([m[2] for m in motion_vectors])) if motion_vectors else 0.0
-        camera_score = max(1.0, min(5.0, 5.0 - (mean_mag / 40.0)))
+        if not has_static_graphics or not valid_jitter_diffs:
+            graphics_score = 5.0
+            avg_jitter = 0.0
+        else:
+            avg_jitter = float(np.mean(valid_jitter_diffs))
+            graphics_score = 5.0
+            if avg_jitter > 3.0:
+                graphics_score -= min(3.0, (avg_jitter - 3.0) * 0.4)
+            graphics_score = max(1.0, min(5.0, graphics_score))
+        graphics_score = max(1.0, min(5.0, graphics_score))
+
+        pan_magnitudes = [np.hypot(dx, dy) for dx, dy in shifts]
+        mean_pan = float(np.mean(pan_magnitudes)) if pan_magnitudes else 0.0
+        camera_jitter_events = 0
+        for i in range(len(shifts) - 1):
+            dx1, dy1 = shifts[i]
+            dx2, dy2 = shifts[i + 1]
+            delta = np.hypot(dx2 - dx1, dy2 - dy1)
+            if delta > max(2.5, mean_pan * 1.5):
+                camera_jitter_events += 1
+        camera_score = 5.0
+        if len(shifts) > 1:
+            jitter_rate = camera_jitter_events / float(len(shifts))
+            camera_score -= min(3.0, jitter_rate * 8.0)
+        camera_score = max(1.0, min(5.0, camera_score))
 
         football_qc = FootballQCResult(
-            ball_integrity_score=round(ball_score, 1),
-            player_integrity_score=round(player_score, 1),
-            occlusion_handling_score=round(occlusion_score, 1),
-            pitch_geometry_score=round(pitch_score, 1),
-            goal_net_score=round(goal_score, 1),
-            broadcast_graphics_score=round(graphics_score, 1),
-            camera_motion_score=round(camera_score, 1),
+            ball_integrity_score=round(ball_score, 2),
+            player_integrity_score=round(player_score, 2),
+            occlusion_handling_score=round(occlusion_score, 2),
+            pitch_geometry_score=round(pitch_score, 2),
+            goal_net_score=round(goal_score, 2),
+            broadcast_graphics_score=round(graphics_score, 2),
+            camera_motion_score=round(camera_score, 2),
             detected_ball_teleportations=teleportation_count,
             detected_duplicate_balls=duplicate_ball_events,
             detected_bent_lines_count=wobble_events,
-            graphics_jitter_detected=(graphics_jitter_val > 15.0)
+            graphics_jitter_detected=(avg_jitter > 5.0)
         )
 
         return technical_qc, temporal_qc, artifact_diff, football_qc, frame_metrics

@@ -74,14 +74,20 @@ def evaluate_player_and_occlusion_integrity(
                 iw = min(x1 + w1, x2 + w2) - ix
                 ih = min(y1 + h1, y2 + h2) - iy
 
-                if iw > 5 and ih > 10:
+                if iw > 8 and ih > 15:
                     occlusion_events += 1
-                    # Inspect overlap region for ghosting/transparency
+                    # Inspect overlap region for ghosting/transparency relative to player body texture
                     roi = frame[iy:iy + ih, ix:ix + iw]
                     gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-                    lap_var = cv2.Laplacian(gray_roi, cv2.CV_32F).var()
-                    # If overlap region has abnormally low texture / blurry wash, flag occlusion artifact
-                    if lap_var < 50.0:
+                    lap_var = float(cv2.Laplacian(gray_roi, cv2.CV_32F).var())
+
+                    # Measure reference texture of player bodies
+                    p1_gray = cv2.cvtColor(frame[y1:y1 + h1, x1:x1 + w1], cv2.COLOR_BGR2GRAY)
+                    p2_gray = cv2.cvtColor(frame[y2:y2 + h2, x2:x2 + w2], cv2.COLOR_BGR2GRAY)
+                    ref_texture = float((cv2.Laplacian(p1_gray, cv2.CV_32F).var() + cv2.Laplacian(p2_gray, cv2.CV_32F).var()) / 2.0)
+
+                    # Only flag occlusion failure if players are textured but overlap is a blurry melted wash
+                    if ref_texture > 65.0 and lap_var < max(25.0, 0.35 * ref_texture):
                         occlusion_failures += 1
 
     # Player Score: 1.0 to 5.0

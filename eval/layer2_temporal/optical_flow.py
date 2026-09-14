@@ -93,21 +93,31 @@ def evaluate_optical_flow_consistency(
             "motion_magnitude": float
         }
     """
-    # Forward flow A -> B
+    # Forward flow A -> B and backward flow B -> A
     flow_ab = compute_dense_flow(frame_a, frame_b)
+    flow_ba = compute_dense_flow(frame_b, frame_a)
     motion_mag = float(np.mean(np.sqrt(flow_ab[..., 0] ** 2 + flow_ab[..., 1] ** 2)))
 
-    # Predict intermediate frame from A along half flow
-    # A -> X is approx flow_ab * 0.5
-    # Warping backward: map(x) = x + 0.5 * flow
-    pred_x_from_a = warp_frame(frame_a, flow_ab * 0.5)
+    # Predict intermediate frame:
+    # In backward mapping (cv2.remap), mapping coordinate map(x) = x - 0.5 * flow
+    # shifts source content forward along the motion trajectory.
+    pred_x_from_a = warp_frame(frame_a, -flow_ab * 0.5)
+    pred_x_from_b = warp_frame(frame_b, -flow_ba * 0.5)
 
-    # Backward flow B -> A
-    flow_ba = compute_dense_flow(frame_b, frame_a)
-    pred_x_from_b = warp_frame(frame_b, flow_ba * 0.5)
+    # Occlusion & Disocclusion handling:
+    # Forward-backward flow consistency check: in non-occluded regions, flow_ab + flow_ba approx 0
+    fb_diff = np.sqrt((flow_ab[..., 0] + flow_ba[..., 0]) ** 2 + (flow_ab[..., 1] + flow_ba[..., 1]) ** 2)
+    occlusion_mask = (fb_diff > 3.0)
 
-    # Bidirectional blended prediction
-    pred_x = (pred_x_from_a.astype(np.float32) * 0.5 + pred_x_from_b.astype(np.float32) * 0.5)
+    res_a = np.abs(frame_generated.astype(np.float32) - pred_x_from_a.astype(np.float32))
+    res_b = np.abs(frame_generated.astype(np.float32) - pred_x_from_b.astype(np.float32))
+
+    # In occluded regions, choose the best matching visible frame to prevent artificial ghosting penalties
+    pred_x = np.where(
+        occlusion_mask[..., np.newaxis],
+        np.where(res_a < res_b, pred_x_from_a, pred_x_from_b),
+        pred_x_from_a.astype(np.float32) * 0.5 + pred_x_from_b.astype(np.float32) * 0.5
+    )
 
     # Pixel residual error
     diff = np.abs(frame_generated.astype(np.float32) - pred_x)

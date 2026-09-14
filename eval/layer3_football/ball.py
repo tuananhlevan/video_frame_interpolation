@@ -19,12 +19,13 @@ from eval.layer3_football.player_occlusion import detect_player_blobs
 def detect_ball_candidates(
     frame: np.ndarray,
     players: Optional[List[Dict[str, any]]] = None,
+    pitch_lines: Optional[List[Tuple[int, int, int, int]]] = None,
     min_circularity: float = 0.35
 ) -> List[Tuple[float, float, float, float]]:
     """Detects potential football candidates on the pitch.
     
     Constrains search to the main pitch polygon (eliminating billboards and crowd)
-    and suppresses player bounding boxes (eliminating cleats and socks).
+    and suppresses player bounding boxes (eliminating cleats and socks) and pitch markings.
     Permits deformed balls down to min_circularity (0.35) so shape degradation
     can be detected and penalized rather than silently discarded.
     
@@ -54,7 +55,12 @@ def detect_ball_candidates(
         px, py, pw, ph = p["bbox"]
         cv2.rectangle(clean_pitch, (px - 10, py - 5), (px + pw + 10, py + ph + 15), 0, thickness=cv2.FILLED)
 
-    # 3. Find white/high-contrast objects inside clean pitch
+    # 3. Suppress known pitch markings (touchlines, penalty boxes)
+    if pitch_lines is not None:
+        for lx1, ly1, lx2, ly2 in pitch_lines:
+            cv2.line(clean_pitch, (lx1, ly1), (lx2, ly2), 0, thickness=14)
+
+    # 4. Find white/high-contrast objects inside clean pitch
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     _, bright_mask = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY)
     ball_search_mask = cv2.bitwise_and(bright_mask, clean_pitch)
@@ -90,6 +96,7 @@ def evaluate_ball_integrity(
     max_ball_velocity_px: Optional[float] = None,
     max_lost_gap_frames: int = 6,
     source_has_ball: Optional[bool] = None,
+    source_tracked_count: Optional[int] = None,
     min_pitch_pct: float = 0.15
 ) -> Tuple[float, Dict[str, any]]:
     """Evaluates ball integrity across a sequence of frames with outlier gating and presence checks.
@@ -244,21 +251,28 @@ def evaluate_ball_integrity(
             "avg_pitch_pct": round(avg_pitch_pct * 100, 2)
         }
 
-    # 4. Soft Saturation Curve (Flaw 2)
+    # 4. Soft Saturation Curve
     dup_rate = duplicate_frames_count / max(1, tracked_count)
     tel_rate = teleportation_count / max(1, tracked_count)
     deform_rate = deformed_frames_count / max(1, tracked_count)
 
     score = 5.0
-    score -= min(2.0, (dup_rate / 0.10) * 2.0)
-    score -= min(1.5, (tel_rate / 0.10) * 1.5)
-    score -= min(1.0, (deform_rate / 0.10) * 1.0)
+    score -= min(2.0, (dup_rate / 0.15) * 2.0)
+    score -= min(1.5, (tel_rate / 0.15) * 1.5)
+    score -= min(1.0, (deform_rate / 0.15) * 1.0)
 
-    # Presence penalty: If video has significant length (>= 30 frames) but tracked ball is < 15% of frames
+    # Relative presence penalty: only penalize if source video had a tracked ball and output lost it,
+    # or if standalone run on wide pitch (>40% pitch) with zero or near-zero tracking
     track_presence = tracked_count / float(total_frames)
-    if total_frames >= 30 and track_presence < 0.15:
-        presence_deficit = (0.15 - track_presence) / 0.15
-        score -= min(2.0, presence_deficit * 2.0)
+    if source_tracked_count is not None:
+        expected_tracked = max(1, source_tracked_count * 2)
+        retention = tracked_count / float(expected_tracked)
+        if retention < 0.70:
+            deficit = (0.70 - retention) / 0.70
+            score -= min(2.0, deficit * 2.0)
+    elif avg_pitch_pct >= 0.40 and total_frames >= 60 and track_presence < 0.08:
+        presence_deficit = (0.08 - track_presence) / 0.08
+        score -= min(1.5, presence_deficit * 1.5)
 
     score = max(1.0, min(5.0, score))
 

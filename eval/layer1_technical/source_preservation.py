@@ -5,12 +5,15 @@ temporal samples (A, B, C... at indices 0, 2, 4...) using PSNR, SSIM,
 MS-SSIM, MAE, and maximum pixel difference.
 """
 
+import logging
 import math
 from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 from upframe.pipeline.decode import VideoDecoder
 from upframe.pipeline.probe import probe_video
+
+logger = logging.getLogger("eval.layer1_technical.source_preservation")
 
 
 def compute_psnr(img1: np.ndarray, img2: np.ndarray) -> float:
@@ -107,10 +110,14 @@ def validate_source_preservation(
     src_idx = 0
     evaluated_count = 0
 
-    stream_src = dec_src.stream_frames()
-    stream_out = dec_out.stream_frames()
+    stream_src = None
+    stream_out = None
+    stream_error = None
 
     try:
+        stream_src = dec_src.stream_frames()
+        stream_out = dec_out.stream_frames()
+
         while True:
             try:
                 frame_src = next(stream_src)
@@ -149,10 +156,23 @@ def validate_source_preservation(
 
             src_idx += 1
     except Exception as e:
-        pass
+        logger.error(f"Source preservation stream encountered error at frame {src_idx}: {e}", exc_info=True)
+        stream_error = str(e)
+    finally:
+        if stream_src is not None:
+            try:
+                stream_src.close()
+            except Exception:
+                pass
+        if stream_out is not None:
+            try:
+                stream_out.close()
+            except Exception:
+                pass
 
     if evaluated_count == 0:
-        return False, {"psnr": 0.0, "ssim": 0.0, "mae": 255.0, "max_diff": 255.0}, ["No frames evaluated for preservation"]
+        err_msg = f"No frames evaluated for preservation: {stream_error}" if stream_error else "No frames evaluated for preservation"
+        return False, {"psnr": 0.0, "ssim": 0.0, "mae": 255.0, "max_diff": 255.0}, [err_msg]
 
     mean_psnr = float(np.mean(psnr_list))
     mean_ssim = float(np.mean(ssim_list))
@@ -160,6 +180,8 @@ def validate_source_preservation(
     max_pixel_diff = float(np.max(max_diff_list))
 
     warnings: List[str] = []
+    if stream_error:
+        warnings.append(f"Preservation stream terminated prematurely: {stream_error}")
     passed = True
 
     if mean_psnr < min_psnr:

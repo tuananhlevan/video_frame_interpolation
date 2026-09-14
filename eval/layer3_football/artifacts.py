@@ -73,7 +73,9 @@ def build_artifact_differential_result(
     out_double: List[float],
     out_tearing: List[float],
     out_deform: List[float],
-    motion_magnitudes: Optional[List[float]] = None
+    motion_magnitudes: Optional[List[float]] = None,
+    src_flicker: Optional[float] = None,
+    out_flicker: Optional[float] = None
 ) -> ArtifactDifferentialResult:
     """Constructs ArtifactDifferentialResult from collected per-frame metrics."""
     src_g = float(np.mean(src_ghosting)) if src_ghosting else 0.0
@@ -105,10 +107,12 @@ def build_artifact_differential_result(
 
     # Motion regime breakdown
     motion_breakdown: Dict[str, float] = {}
-    if motion_magnitudes and len(motion_magnitudes) == len(out_double):
+    if motion_magnitudes and out_double:
+        min_len = min(len(motion_magnitudes), len(out_double))
+        m_mags = motion_magnitudes[:min_len]
+        o_errs = out_double[:min_len]
         low_m, med_m, high_m, vhigh_m = [], [], [], []
-        for i, mag in enumerate(motion_magnitudes):
-            err = out_double[i] if i < len(out_double) else 0.0
+        for mag, err in zip(m_mags, o_errs):
             if mag < 3.0:
                 low_m.append(err)
             elif mag < 10.0:
@@ -117,24 +121,30 @@ def build_artifact_differential_result(
                 high_m.append(err)
             else:
                 vhigh_m.append(err)
-        motion_breakdown["low_motion_added"] = float(np.mean(low_m)) if low_m else 0.002
-        motion_breakdown["med_motion_added"] = float(np.mean(med_m)) if med_m else 0.008
-        motion_breakdown["high_motion_added"] = float(np.mean(high_m)) if high_m else 0.025
-        motion_breakdown["very_high_motion_added"] = float(np.mean(vhigh_m)) if vhigh_m else 0.065
+        overall_m = float(np.mean(o_errs)) if o_errs else 0.0
+        motion_breakdown["low_motion_added"] = float(np.mean(low_m)) if low_m else overall_m
+        motion_breakdown["med_motion_added"] = float(np.mean(med_m)) if med_m else overall_m
+        motion_breakdown["high_motion_added"] = float(np.mean(high_m)) if high_m else overall_m
+        motion_breakdown["very_high_motion_added"] = float(np.mean(vhigh_m)) if vhigh_m else overall_m
     else:
         motion_breakdown = {
-            "low_motion_added": 0.003,
-            "med_motion_added": 0.012,
-            "high_motion_added": 0.038,
-            "very_high_motion_added": 0.085
+            "low_motion_added": 0.0,
+            "med_motion_added": 0.0,
+            "high_motion_added": 0.0,
+            "very_high_motion_added": 0.0
         }
+
+    # Dynamic temporal flicker calculation
+    s_flick = float(src_flicker) if src_flicker is not None else 0.0
+    o_flick = float(out_flicker) if out_flicker is not None else 0.0
+    add_flick = max(0.0, o_flick - s_flick)
 
     return ArtifactDifferentialResult(
         ghosting=ArtifactMetric(source_level=src_g, output_level=out_g, added_level=add_g, severity_level=to_severity(add_g)),
         double_contour=ArtifactMetric(source_level=src_dc, output_level=out_dc, added_level=add_dc, severity_level=to_severity(add_dc)),
         edge_tearing=ArtifactMetric(source_level=src_et, output_level=out_et, added_level=add_et, severity_level=to_severity(add_et)),
         deformation=ArtifactMetric(source_level=src_df, output_level=out_df, added_level=add_df, severity_level=to_severity(add_df)),
-        temporal_flicker=ArtifactMetric(source_level=0.02, output_level=0.03, added_level=0.01, severity_level=1),
+        temporal_flicker=ArtifactMetric(source_level=s_flick, output_level=o_flick, added_level=add_flick, severity_level=to_severity(add_flick)),
         motion_regime_breakdown=motion_breakdown
     )
 

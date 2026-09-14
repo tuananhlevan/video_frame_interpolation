@@ -60,14 +60,21 @@ def evaluate_temporal_flicker(
         lap2 = cv2.Laplacian(grays[i + 1], cv2.CV_32F).var()
         var_flickers.append(abs(lap1 - lap2) / (lap1 + lap2 + 1e-5))
 
-    mean_var_flicker = float(np.mean(var_flickers)) if var_flickers else 0.0
+    # 2nd-order temporal residual: isolates true temporal flicker / pulsation from linear camera pan motion
+    temporal_residuals: List[float] = []
+    for i in range(1, len(grays) - 1):
+        pred_linear = 0.5 * (grays[i - 1] + grays[i + 1])
+        temporal_residuals.append(float(np.mean(np.abs(grays[i] - pred_linear))))
+
+    mean_res = float(np.mean(temporal_residuals)) if temporal_residuals else mean_d1
 
     # Composite flicker score [0.0, 10.0], lower is better
-    flicker_score = float(mean_d1 * 0.1 + mean_var_flicker * 5.0)
+    flicker_score = float(mean_res * 0.15 + mean_var_flicker * 3.5)
 
     details = {
         "mean_consecutive_diff": mean_d1,
         "mean_lag2_diff": mean_d2,
+        "mean_temporal_residual": mean_res,
         "odd_even_oscillation_index": mean_oscillation,
         "texture_flicker_index": mean_var_flicker,
         "flicker_score": flicker_score

@@ -33,6 +33,7 @@ def validate_scene_cut_handling(
     stream_out = dec_out.stream_frames()
 
     prev_frame_src: Optional[np.ndarray] = None
+    prev_out_odd: Optional[np.ndarray] = None
     src_idx = 0
 
     try:
@@ -60,11 +61,10 @@ def validate_scene_cut_handling(
                     cut_idx = src_idx - 1
                     cuts_detected.append(cut_idx)
 
-                    # The intermediate generated frame between cut_idx and src_idx was frame_out_even
-                    # from the previous step or frame_out_odd before frame_out_even.
-                    # If frame_out_even (at index 2*src_idx) was preceded by frame_out_odd (at index 2*cut_idx + 1)
-                    if frame_out_odd is not None:
-                        frame_inter = frame_out_odd
+                    # The intermediate generated frame between cut_idx and src_idx is prev_out_odd
+                    # (at output frame index 2 * cut_idx + 1)
+                    if prev_out_odd is not None:
+                        frame_inter = prev_out_odd
                         if frame_inter.shape != frame_src.shape:
                             frame_inter = cv2.resize(frame_inter, (frame_src.shape[1], frame_src.shape[0]))
 
@@ -90,12 +90,13 @@ def validate_scene_cut_handling(
                             )
 
             prev_frame_src = frame_src.copy()
+            prev_out_odd = frame_out_odd.copy() if frame_out_odd is not None else None
             src_idx += 1
 
             if max_frames_to_scan and src_idx >= max_frames_to_scan:
                 break
     except Exception as e:
-        pass
+        warnings.append(f"Scene cut scanning interrupted by error: {e}")
 
     properly_handled = len(hybrid_failures) == 0
     details = {

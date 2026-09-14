@@ -60,7 +60,8 @@ def evaluate_motion_smoothness(
     max_acc = float(np.max(accelerations)) if accelerations else 0.0
 
     # Smoothness score in [0.0, 1.0]: 1.0 is smooth, decreases with discontinuities and high jerk
-    discontinuity_penalty = min(0.6, len(discontinuity_indices) * 0.05)
+    discontinuity_rate = len(discontinuity_indices) / float(max(1, len(motion_vectors)))
+    discontinuity_penalty = min(0.6, (discontinuity_rate / 0.02) * 0.6)
     jerk_penalty = min(0.4, mean_acc / 10.0)
     smoothness_score = max(0.0, 1.0 - discontinuity_penalty - jerk_penalty)
 
