@@ -76,11 +76,21 @@ def detect_ball_candidates(
     return candidates
 
 
+def get_pitch_coverage(frame: np.ndarray) -> float:
+    """Calculates the proportion of the frame occupied by the green pitch field."""
+    small = cv2.resize(frame, (320, 180), interpolation=cv2.INTER_NEAREST)
+    hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, np.array([30, 40, 40]), np.array([90, 255, 255]))
+    return float(np.count_nonzero(mask)) / float(320 * 180)
+
+
 def evaluate_ball_integrity(
     frames_sequence: List[np.ndarray],
     fps: float = 50.0,
     max_ball_velocity_px: Optional[float] = None,
-    max_lost_gap_frames: int = 6
+    max_lost_gap_frames: int = 6,
+    source_has_ball: Optional[bool] = None,
+    min_pitch_pct: float = 0.15
 ) -> Tuple[float, Dict[str, any]]:
     """Evaluates ball integrity across a sequence of frames with outlier gating and presence checks.
     
@@ -91,6 +101,7 @@ def evaluate_ball_integrity(
     if total_frames == 0:
         return 5.0, {
             "score": 5.0,
+            "ball_present_in_scene": False,
             "duplicate_ball_events": 0,
             "teleportation_count": 0,
             "deformed_frames_count": 0,
@@ -98,7 +109,8 @@ def evaluate_ball_integrity(
             "dup_rate_pct": 0.0,
             "tel_rate_pct": 0.0,
             "deform_rate_pct": 0.0,
-            "track_presence_pct": 0.0
+            "track_presence_pct": 0.0,
+            "avg_pitch_pct": 0.0
         }
 
     base_velocity_limit = max_ball_velocity_px if max_ball_velocity_px is not None else 130.0 * (50.0 / max(1.0, fps))
@@ -107,12 +119,15 @@ def evaluate_ball_integrity(
     duplicate_frames_count = 0
     deformed_frames_count = 0
     trajectories: List[Tuple[float, float]] = []
+    pitch_coverage_samples: List[float] = []
 
     prev_pos: Optional[Tuple[float, float]] = None
     prev_prev_pos: Optional[Tuple[float, float]] = None
     frames_since_last_seen = 0
 
     for idx, frame in enumerate(frames_sequence):
+        if idx % 5 == 0 or idx == total_frames - 1:
+            pitch_coverage_samples.append(get_pitch_coverage(frame))
         players = detect_player_blobs(frame)
         candidates = detect_ball_candidates(frame, players=players, min_circularity=0.50)
 
@@ -186,11 +201,38 @@ def evaluate_ball_integrity(
             duplicate_frames_count += 1
 
     tracked_count = len(trajectories)
+    avg_pitch_pct = float(np.mean(pitch_coverage_samples)) if pitch_coverage_samples else 0.0
 
-    # 3. Flaw 1 fix: Invisible / Missing ball penalty
+    # 3. Context & presence determination
+    if source_has_ball is False:
+        scene_has_ball = False
+    elif source_has_ball is True:
+        scene_has_ball = True
+    else:
+        # Standalone evaluation: infer presence from active pitch play coverage
+        scene_has_ball = (avg_pitch_pct >= min_pitch_pct)
+
+    # If the scene does not have an active pitch or ball was not present in source, having 0 ball candidates is expected
+    if not scene_has_ball:
+        return 5.0, {
+            "score": 5.0,
+            "ball_present_in_scene": False,
+            "duplicate_ball_events": duplicate_frames_count,
+            "teleportation_count": teleportation_count,
+            "deformed_frames_count": deformed_frames_count,
+            "tracked_positions_count": tracked_count,
+            "dup_rate_pct": 0.0,
+            "tel_rate_pct": 0.0,
+            "deform_rate_pct": 0.0,
+            "track_presence_pct": 0.0,
+            "avg_pitch_pct": round(avg_pitch_pct * 100, 2)
+        }
+
+    # True active football scene where ball is expected:
     if tracked_count == 0:
         return 1.0, {
             "score": 1.0,
+            "ball_present_in_scene": True,
             "duplicate_ball_events": duplicate_frames_count,
             "teleportation_count": teleportation_count,
             "deformed_frames_count": deformed_frames_count,
@@ -198,7 +240,8 @@ def evaluate_ball_integrity(
             "dup_rate_pct": 0.0,
             "tel_rate_pct": 0.0,
             "deform_rate_pct": 0.0,
-            "track_presence_pct": 0.0
+            "track_presence_pct": 0.0,
+            "avg_pitch_pct": round(avg_pitch_pct * 100, 2)
         }
 
     # 4. Soft Saturation Curve (Flaw 2)
@@ -221,6 +264,7 @@ def evaluate_ball_integrity(
 
     details = {
         "score": round(score, 2),
+        "ball_present_in_scene": True,
         "duplicate_ball_events": duplicate_frames_count,
         "teleportation_count": teleportation_count,
         "deformed_frames_count": deformed_frames_count,
@@ -228,7 +272,8 @@ def evaluate_ball_integrity(
         "dup_rate_pct": round(dup_rate * 100, 2),
         "tel_rate_pct": round(tel_rate * 100, 2),
         "deform_rate_pct": round(deform_rate * 100, 2),
-        "track_presence_pct": round(track_presence * 100, 2)
+        "track_presence_pct": round(track_presence * 100, 2),
+        "avg_pitch_pct": round(avg_pitch_pct * 100, 2)
     }
 
     return float(score), details

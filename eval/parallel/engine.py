@@ -23,7 +23,7 @@ from eval.layer1_technical.source_preservation import compute_psnr, compute_ssim
 from eval.layer2_temporal.optical_flow import evaluate_optical_flow_consistency
 from eval.layer2_temporal.smoothness import compute_frame_motion_vector
 from eval.layer3_football.artifacts import measure_frame_artifacts
-from eval.layer3_football.ball import detect_ball_candidates
+from eval.layer3_football.ball import detect_ball_candidates, get_pitch_coverage
 from eval.layer3_football.pitch_geometry import extract_pitch_lines
 from eval.layer3_football.player_occlusion import detect_player_blobs
 from eval.types import (
@@ -106,6 +106,8 @@ class ChunkEvaluationOutput:
     laplacian_variances: List[float] = field(default_factory=list)
     diffs_tl: List[float] = field(default_factory=list)
     diffs_tr: List[float] = field(default_factory=list)
+    pitch_coverage_samples: List[float] = field(default_factory=list)
+    src_ball_detected_count: int = 0
     error: Optional[str] = None
 
 
@@ -182,6 +184,10 @@ def evaluate_chunk_worker(task: ChunkEvaluationTask) -> ChunkEvaluationOutput:
                         out.src_double.append(m_src["double_contour"])
                         out.src_tearing.append(m_src["edge_tearing"])
                         out.src_deform.append(m_src["deformation"])
+
+                        src_cands = detect_ball_candidates(frame_src, min_circularity=0.50)
+                        if src_cands:
+                            out.src_ball_detected_count += 1
 
                     if prev_frame_src is not None:
                         diff_cut = compute_frame_difference(prev_frame_src, frame_src)
@@ -294,6 +300,9 @@ def evaluate_chunk_worker(task: ChunkEvaluationTask) -> ChunkEvaluationOutput:
                         saved_diff += 1
 
             if is_active:
+                if raw_out_idx % 10 == 0:
+                    out.pitch_coverage_samples.append(get_pitch_coverage(frame))
+
                 # Football checks
                 players = detect_player_blobs(frame)
                 out.total_players_checked += len(players)
@@ -592,6 +601,8 @@ class ParallelEvaluationEngine:
         laplacian_variances: List[float] = []
         diffs_tl: List[float] = []
         diffs_tr: List[float] = []
+        pitch_coverage_samples: List[float] = []
+        src_ball_detected_count = 0
 
         for r in results:
             if r.error:
@@ -637,6 +648,8 @@ class ParallelEvaluationEngine:
             laplacian_variances.extend(r.laplacian_variances)
             diffs_tl.extend(r.diffs_tl)
             diffs_tr.extend(r.diffs_tr)
+            pitch_coverage_samples.extend(r.pitch_coverage_samples)
+            src_ball_detected_count += r.src_ball_detected_count
 
         # -------------------------------------------------------------
         # Layer 1 Technical QC
@@ -773,17 +786,25 @@ class ParallelEvaluationEngine:
         # Layer 3 Football QC
         # -------------------------------------------------------------
         # Ball
+        avg_pitch_pct = float(np.mean(pitch_coverage_samples)) if pitch_coverage_samples else 0.0
         tracked_count = len(ball_trajectories)
-        if tracked_count == 0:
-            ball_score = 1.0
+        scene_has_pitch = (avg_pitch_pct >= 0.15)
+        source_had_ball = (src_ball_detected_count >= (1 if total_eval_frames < 60 else 2))
+
+        if not scene_has_pitch or not source_had_ball:
+            # Ball-free or non-pitch scene: no ball artifacts expected -> clean (5.0)
+            ball_score = 5.0
         else:
-            dup_rate = duplicate_ball_events / float(tracked_count)
-            tel_rate = teleportation_count / float(tracked_count)
-            deform_rate = deformed_ball_events / float(tracked_count)
-            ball_score = 5.0 - min(2.0, (dup_rate / 0.10) * 2.0) - min(1.5, (tel_rate / 0.10) * 1.5) - min(1.0, (deform_rate / 0.10) * 1.0)
-            if total_eval_frames >= 30 and (tracked_count / float(total_eval_frames)) < 0.15:
-                ball_score -= min(2.0, (0.15 - (tracked_count / float(total_eval_frames))) / 0.15 * 2.0)
-            ball_score = max(1.0, min(5.0, ball_score))
+            if tracked_count == 0:
+                ball_score = 1.0  # Dissolved ball!
+            else:
+                dup_rate = duplicate_ball_events / float(tracked_count)
+                tel_rate = teleportation_count / float(tracked_count)
+                deform_rate = deformed_ball_events / float(tracked_count)
+                ball_score = 5.0 - min(2.0, (dup_rate / 0.10) * 2.0) - min(1.5, (tel_rate / 0.10) * 1.5) - min(1.0, (deform_rate / 0.10) * 1.0)
+                if total_eval_frames >= 30 and (tracked_count / float(total_eval_frames)) < 0.15:
+                    ball_score -= min(2.0, (0.15 - (tracked_count / float(total_eval_frames))) / 0.15 * 2.0)
+                ball_score = max(1.0, min(5.0, ball_score))
 
         player_score = 5.0
         if total_players_checked > 0:

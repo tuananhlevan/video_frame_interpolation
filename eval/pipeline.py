@@ -38,7 +38,7 @@ from eval.layer3_football import (
     evaluate_player_and_occlusion_integrity
 )
 from eval.layer3_football.artifacts import build_artifact_differential_result, measure_frame_artifacts
-from eval.layer3_football.ball import detect_ball_candidates
+from eval.layer3_football.ball import detect_ball_candidates, get_pitch_coverage
 from eval.layer3_football.pitch_geometry import extract_pitch_lines
 from eval.layer3_football.player_occlusion import detect_player_blobs
 
@@ -387,6 +387,8 @@ class EvaluationPipeline:
         deformed_ball_events = 0
         ball_frames_since_last_seen = 0
         base_ball_velocity = 130.0 * (50.0 / max(1.0, output_meta.avg_fps or 50.0))
+        pitch_coverage_samples: List[float] = []
+        src_ball_detected_count = 0
 
         # Player & occlusion tracking
         total_players_checked = 0
@@ -443,13 +445,17 @@ class EvaluationPipeline:
                         frame_src = None
 
                     if frame_src is not None:
-                        # Source baseline artifacts (sampled every N frames)
+                        # Source baseline artifacts & ball presence (sampled every N frames)
                         if src_idx % self.config.source_baseline_stride == 0:
                             m_src = measure_frame_artifacts(frame_src)
                             src_ghosting.append(m_src["ghosting"])
                             src_double.append(m_src["double_contour"])
                             src_tearing.append(m_src["edge_tearing"])
                             src_deform.append(m_src["deformation"])
+
+                            src_cands = detect_ball_candidates(frame_src, min_circularity=0.50)
+                            if src_cands:
+                                src_ball_detected_count += 1
 
                         # Scene cut detection between prev_frame_src and frame_src
                         if prev_frame_src is not None:
@@ -575,6 +581,9 @@ class EvaluationPipeline:
                             saved_diff += 1
 
                 # Football checks on every frame
+                if raw_out_idx % 10 == 0:
+                    pitch_coverage_samples.append(get_pitch_coverage(frame))
+
                 # Players & Occlusion
                 players = detect_player_blobs(frame)
                 total_players_checked += len(players)
@@ -831,17 +840,25 @@ class EvaluationPipeline:
         # Aggregate Layer 3: Football QC Result
         # -------------------------------------------------------------
         # Ball
+        avg_pitch_pct = float(np.mean(pitch_coverage_samples)) if pitch_coverage_samples else 0.0
         tracked_count = len(ball_trajectories)
-        if tracked_count == 0:
-            ball_score = 1.0
+        scene_has_pitch = (avg_pitch_pct >= 0.15)
+        source_had_ball = (src_ball_detected_count >= (1 if raw_out_idx < 60 else 2))
+
+        if not scene_has_pitch or not source_had_ball:
+            # Ball-free or non-pitch scene: no ball artifacts expected -> clean (5.0)
+            ball_score = 5.0
         else:
-            dup_rate = duplicate_ball_events / float(tracked_count)
-            tel_rate = teleportation_count / float(tracked_count)
-            deform_rate = deformed_ball_events / float(tracked_count)
-            ball_score = 5.0 - min(2.0, (dup_rate / 0.10) * 2.0) - min(1.5, (tel_rate / 0.10) * 1.5) - min(1.0, (deform_rate / 0.10) * 1.0)
-            if raw_out_idx >= 30 and (tracked_count / float(raw_out_idx)) < 0.15:
-                ball_score -= min(2.0, (0.15 - (tracked_count / float(raw_out_idx))) / 0.15 * 2.0)
-            ball_score = max(1.0, min(5.0, ball_score))
+            if tracked_count == 0:
+                ball_score = 1.0  # Dissolved ball!
+            else:
+                dup_rate = duplicate_ball_events / float(tracked_count)
+                tel_rate = teleportation_count / float(tracked_count)
+                deform_rate = deformed_ball_events / float(tracked_count)
+                ball_score = 5.0 - min(2.0, (dup_rate / 0.10) * 2.0) - min(1.5, (tel_rate / 0.10) * 1.5) - min(1.0, (deform_rate / 0.10) * 1.0)
+                if raw_out_idx >= 30 and (tracked_count / float(raw_out_idx)) < 0.15:
+                    ball_score -= min(2.0, (0.15 - (tracked_count / float(raw_out_idx))) / 0.15 * 2.0)
+                ball_score = max(1.0, min(5.0, ball_score))
 
         # Player
         player_score = 5.0
@@ -1014,6 +1031,7 @@ class EvaluationPipeline:
         deformed_ball_events = 0
         ball_frames_since_last_seen = 0
         base_ball_velocity = 130.0 * (50.0 / max(1.0, source_meta.avg_fps or 25.0))
+        pitch_coverage_samples: List[float] = []
 
         # Player & occlusion tracking
         total_players_checked = 0
@@ -1135,6 +1153,9 @@ class EvaluationPipeline:
             # -------------------------------------------------------------
             # Per-frame Football checks
             # -------------------------------------------------------------
+            if eval_idx % 10 == 0:
+                pitch_coverage_samples.append(get_pitch_coverage(frame))
+
             # Players & Occlusion
             players = detect_player_blobs(frame)
             total_players_checked += len(players)
@@ -1325,17 +1346,24 @@ class EvaluationPipeline:
         # Aggregate Layer 3: Football QC Result
         # -------------------------------------------------------------
         # Ball
+        avg_pitch_pct = float(np.mean(pitch_coverage_samples)) if pitch_coverage_samples else 0.0
         tracked_count = len(ball_trajectories)
-        if tracked_count == 0:
-            ball_score = 1.0
+        scene_has_pitch = (avg_pitch_pct >= 0.15)
+
+        if not scene_has_pitch:
+            # Ball-free / non-pitch scene: no ball artifacts expected -> clean (5.0)
+            ball_score = 5.0
         else:
-            dup_rate = duplicate_ball_events / float(tracked_count)
-            tel_rate = teleportation_count / float(tracked_count)
-            deform_rate = deformed_ball_events / float(tracked_count)
-            ball_score = 5.0 - min(2.0, (dup_rate / 0.10) * 2.0) - min(1.5, (tel_rate / 0.10) * 1.5) - min(1.0, (deform_rate / 0.10) * 1.0)
-            if eval_idx >= 30 and (tracked_count / float(eval_idx)) < 0.15:
-                ball_score -= min(2.0, (0.15 - (tracked_count / float(eval_idx))) / 0.15 * 2.0)
-            ball_score = max(1.0, min(5.0, ball_score))
+            if tracked_count == 0:
+                ball_score = 1.0  # Dissolved ball!
+            else:
+                dup_rate = duplicate_ball_events / float(tracked_count)
+                tel_rate = teleportation_count / float(tracked_count)
+                deform_rate = deformed_ball_events / float(tracked_count)
+                ball_score = 5.0 - min(2.0, (dup_rate / 0.10) * 2.0) - min(1.5, (tel_rate / 0.10) * 1.5) - min(1.0, (deform_rate / 0.10) * 1.0)
+                if eval_idx >= 30 and (tracked_count / float(eval_idx)) < 0.15:
+                    ball_score -= min(2.0, (0.15 - (tracked_count / float(eval_idx))) / 0.15 * 2.0)
+                ball_score = max(1.0, min(5.0, ball_score))
 
         # Player
         player_score = 5.0
