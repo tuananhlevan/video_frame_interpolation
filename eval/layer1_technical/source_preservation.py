@@ -81,7 +81,7 @@ def validate_source_preservation(
     output_path: str,
     max_frames: Optional[int] = None,
     stride: int = 1,
-    min_psnr: float = 28.0,
+    min_psnr: float = 30.0,
     min_ssim: float = 0.90,
     max_mae: float = 8.0
 ) -> Tuple[bool, Dict[str, float], List[str]]:
@@ -134,8 +134,9 @@ def validate_source_preservation(
 
                 psnr_val = compute_psnr(frame_src, frame_out_even)
                 ssim_val = compute_ssim(frame_src, frame_out_even)
-                mae_val = float(np.mean(np.abs(frame_src.astype(np.float32) - frame_out_even.astype(np.float32))))
-                max_d = float(np.max(np.abs(frame_src.astype(np.float32) - frame_out_even.astype(np.float32))))
+                diff = np.abs(frame_src.astype(np.float32) - frame_out_even.astype(np.float32))
+                mae_val = float(np.mean(diff))
+                max_d = float(np.max(diff))
 
                 psnr_list.append(psnr_val)
                 ssim_list.append(ssim_val)
@@ -188,7 +189,7 @@ def validate_source_preservation(
         "ssim": mean_ssim,
         "mae": mean_mae,
         "max_diff": max_pixel_diff,
-        "frames_evaluated": evaluated_count
+        "frames_evaluated": evaluated_count,
     }
 
     return passed, metrics, warnings

@@ -37,6 +37,7 @@ class PipelineScheduler:
         max_retries: int = 3,
         resume: bool = False,
         fp16: bool = True,
+        workers: Optional[int] = None,
         log_dir: str = "upframe_log"
     ) -> None:
         self.metadata = metadata
@@ -51,6 +52,7 @@ class PipelineScheduler:
         self.max_retries = max_retries
         self.resume = resume
         self.fp16 = fp16
+        self.workers = workers
         self.log_dir = log_dir or "upframe_log"
 
         output_stem = os.path.splitext(os.path.basename(self.output_filepath))[0]
@@ -73,17 +75,28 @@ class PipelineScheduler:
 
         # Device determination
         import torch
+        base_devices: List[str] = []
         if gpus is not None and len(gpus) > 0 and torch.cuda.is_available():
-            self.devices = [f"cuda:{g}" for g in gpus if g < torch.cuda.device_count()]
-            if not self.devices:
-                self.devices = ["cuda:0"]
+            base_devices = [f"cuda:{g}" for g in gpus if g < torch.cuda.device_count()]
+            if not base_devices:
+                base_devices = ["cuda:0"]
+        elif gpus is not None and len(gpus) == 0:
+            base_devices = ["cpu"]
         elif torch.cuda.is_available():
             count = torch.cuda.device_count()
-            self.devices = [f"cuda:{i}" for i in range(count)]
+            base_devices = [f"cuda:{i}" for i in range(count)]
         else:
-            self.devices = ["cpu"]
+            base_devices = ["cpu"]
 
-        logger.info(f"Initialized scheduler with devices: {self.devices}")
+        if self.workers is not None and self.workers > 0:
+            if base_devices == ["cpu"]:
+                self.devices = ["cpu"] * self.workers
+            else:
+                self.devices = [base_devices[i % len(base_devices)] for i in range(self.workers)]
+        else:
+            self.devices = base_devices
+
+        logger.info(f"Initialized scheduler with {len(self.devices)} workers on devices: {self.devices}")
 
     def generate_chunk_ranges(self) -> List[tuple[int, int, int]]:
         """Generates (chunk_id, start_frame, end_frame) tuples with 1-frame boundary overlap."""
@@ -123,7 +136,11 @@ class PipelineScheduler:
                     model_name=self.model_name,
                     checkpoint_path=self.checkpoint_path,
                     scene_threshold=self.scene_threshold,
-                    fp16=self.fp16
+                    fp16=self.fp16,
+                    color_space=self.metadata.color_space,
+                    color_primaries=self.metadata.color_primaries,
+                    color_transfer=self.metadata.color_transfer,
+                    color_range=self.metadata.color_range
                 )
             )
 
@@ -158,7 +175,8 @@ class PipelineScheduler:
         pbar.close()
 
         # Step 2: Ordered Merge & Encoding
-        logger.info("Merging chunk outputs into final 50 fps container...")
+        target_fps = self.metadata.target_fps
+        logger.info(f"Merging chunk outputs into final {target_fps:.2f} fps container...")
         sorted_chunk_ids = sorted(chunk_results.keys())
         chunk_files = [chunk_results[cid].output_file for cid in sorted_chunk_ids if chunk_results[cid].output_file]
 
@@ -166,16 +184,20 @@ class PipelineScheduler:
             output_filepath=self.output_filepath,
             width=self.metadata.width,
             height=self.metadata.height,
-            fps=50.0,
+            fps=target_fps,
             source_audio_path=self.metadata.filepath if self.metadata.has_audio else None,
             crf=self.crf,
             preset=self.preset,
-            use_nvenc=self.use_nvenc
+            use_nvenc=self.use_nvenc,
+            color_space=self.metadata.color_space,
+            color_primaries=self.metadata.color_primaries,
+            color_transfer=self.metadata.color_transfer,
+            color_range=self.metadata.color_range
         )
         encoder.start()
         try:
             merger = ChunkMerger(width=self.metadata.width, height=self.metadata.height)
-            total_encoded_frames = merger.stream_merge_chunk_files(chunk_files, encoder, fps=50.0)
+            total_encoded_frames = merger.stream_merge_chunk_files(chunk_files, encoder, fps=target_fps)
             encoder.finish()
         except Exception:
             if encoder.proc is not None:
@@ -197,7 +219,7 @@ class PipelineScheduler:
             output_path=self.output_filepath,
             resolution=f"{self.metadata.width}x{self.metadata.height}",
             input_fps=self.metadata.nominal_fps,
-            output_fps=50.0,
+            output_fps=target_fps,
             duration_sec=self.metadata.duration,
             duration_str=format_duration(self.metadata.duration),
             model_name=self.model_name,

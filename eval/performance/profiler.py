@@ -85,3 +85,191 @@ def evaluate_performance(
         performance_score=round(perf_score, 2),
         is_measured=True
     )
+
+
+def _parse_time_string_or_number(val: object) -> Optional[float]:
+    """Parses a duration string or number into float seconds."""
+    import re
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, str):
+        val = val.strip()
+        m_hms = re.search(r'(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)', val)
+        if m_hms:
+            h = int(m_hms.group(1) or 0)
+            m = int(m_hms.group(2))
+            s = float(m_hms.group(3))
+            return h * 3600 + m * 60 + s
+        m_sec = re.search(r'([0-9.]+)', val)
+        if m_sec:
+            try:
+                return float(m_sec.group(1))
+            except ValueError:
+                return None
+    return None
+
+
+def _extract_time_from_text(content: str) -> Optional[float]:
+    """Extracts processing time in seconds from arbitrary text/log output."""
+    import re
+    m_hms = re.search(r'Processing\s*time\s*:\s*(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)', content, re.IGNORECASE)
+    if m_hms:
+        h = int(m_hms.group(1) or 0)
+        m = int(m_hms.group(2))
+        s = float(m_hms.group(3))
+        return h * 3600 + m * 60 + s
+
+    patterns = [
+        r'["\']?(?:Processing\s*time|processing_time_sec|processing_time|total_proc_time)["\']?\s*[:=]\s*["\']?([0-9.]+)',
+        r'(?:completed|finished)\s*(?:processing\s*)?in\s*([0-9.]+)\s*s'
+    ]
+    for pat in patterns:
+        m = re.search(pat, content, re.IGNORECASE)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                pass
+    return None
+
+
+def find_upframe_processing_time(
+    output_path: str,
+    source_path: Optional[str] = None,
+    log_file: Optional[str] = None
+) -> Optional[float]:
+    """Finds and extracts processing time from an upframe log/report matching the processing video.
+    
+    Searches for report files ({video_stem}_report.json, {video_stem}_report.txt, {video_stem}.log)
+    in standard log locations (upframe_log/, logs/, output video directory, current directory).
+    Returns None if no matching processing time log is found.
+    """
+    import json
+    import logging
+    import os
+
+    logger = logging.getLogger(__name__)
+    candidates: list[str] = []
+
+    if log_file and os.path.exists(log_file):
+        candidates.append(os.path.abspath(log_file))
+
+    out_basename = os.path.basename(output_path)
+    out_stem = os.path.splitext(out_basename)[0]
+    out_dir = os.path.dirname(os.path.abspath(output_path))
+    src_stem = os.path.splitext(os.path.basename(source_path))[0] if source_path else ""
+
+    search_dirs = [
+        "upframe_log",
+        "upframe_logs",
+        "logs",
+        "log",
+        out_dir,
+        ".",
+        "evaluation_log"
+    ]
+
+    filenames = [
+        f"{out_stem}_report.json",
+        f"{out_stem}_report.txt",
+        f"{out_stem}.log",
+        f"{out_stem}_upframe.log",
+        f"upframe_{out_stem}.log",
+        f"{out_stem}.json",
+        f"{out_stem}.txt",
+    ]
+    if src_stem:
+        filenames.extend([
+            f"{src_stem}_report.json",
+            f"{src_stem}_report.txt",
+            f"{src_stem}.log",
+        ])
+
+    expanded_search_dirs: list[str] = []
+    for d in search_dirs:
+        if os.path.exists(d) and os.path.isdir(d):
+            if d not in expanded_search_dirs:
+                expanded_search_dirs.append(d)
+            try:
+                for entry in os.scandir(d):
+                    if entry.is_dir() and entry.path not in expanded_search_dirs:
+                        expanded_search_dirs.append(entry.path)
+            except Exception:
+                pass
+
+    filenames = [
+        f"{out_stem}_report.json",
+        f"{out_stem}_report.txt",
+        f"{out_stem}.log",
+        f"{out_stem}_upframe.log",
+        f"upframe_{out_stem}.log",
+        f"{out_stem}.json",
+        f"{out_stem}.txt",
+    ]
+    if src_stem:
+        filenames.extend([
+            f"{src_stem}_report.json",
+            f"{src_stem}_report.txt",
+            f"{src_stem}.log",
+            f"{src_stem}_upframe.log",
+            f"upframe_{src_stem}.log",
+            f"{src_stem}.json",
+            f"{src_stem}.txt",
+        ])
+
+    for d in expanded_search_dirs:
+        for fn in filenames:
+            cand_path = os.path.abspath(os.path.join(d, fn))
+            if os.path.isfile(cand_path) and cand_path not in candidates:
+                candidates.append(cand_path)
+        for generic_fn in ("report.json", "report.txt"):
+            cand_path = os.path.abspath(os.path.join(d, generic_fn))
+            if os.path.isfile(cand_path) and cand_path not in candidates:
+                candidates.append(cand_path)
+
+    for cand in candidates:
+        if not os.path.isfile(cand):
+            continue
+        try:
+            cand_base = os.path.basename(cand)
+            if cand.endswith(".json"):
+                with open(cand, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    json_out = str(data.get("output_path", data.get("output_file", "")))
+                    json_in = str(data.get("input_path", data.get("input_file", "")))
+                    if cand_base in ("report.json", "report.txt"):
+                        matched = False
+                        if out_stem and (out_stem in json_out or out_stem in json_in or out_stem in cand):
+                            matched = True
+                        if src_stem and (src_stem in json_out or src_stem in json_in or src_stem in cand):
+                            matched = True
+                        if not matched:
+                            continue
+                    elif json_out and out_stem not in json_out and out_basename not in json_out:
+                        continue
+                    for key in ("processing_time_sec", "total_processing_time_sec", "processing_time"):
+                        if key in data and data[key] is not None:
+                            val = _parse_time_string_or_number(data[key])
+                            if val is not None and val > 0:
+                                logger.info(f"Discovered upframe processing time ({val:.2f}s) in log: {cand}")
+                                return val
+            else:
+                with open(cand, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+                if cand_base in ("report.txt", "report.json"):
+                    matched = False
+                    if out_stem and (out_stem in content or out_stem in cand):
+                        matched = True
+                    if src_stem and (src_stem in content or src_stem in cand):
+                        matched = True
+                    if not matched:
+                        continue
+                val = _extract_time_from_text(content)
+                if val is not None and val > 0:
+                    logger.info(f"Discovered upframe processing time ({val:.2f}s) in log: {cand}")
+                    return val
+        except Exception as e:
+            logger.debug(f"Error reading candidate log {cand}: {e}")
+
+    return None

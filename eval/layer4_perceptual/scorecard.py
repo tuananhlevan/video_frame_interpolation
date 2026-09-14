@@ -48,10 +48,10 @@ def compute_production_scorecard(
 
     # Performance Score (0-10 scale)
     rtf = performance_qc.realtime_factor
-    is_measured = performance_qc.is_measured or (performance_qc.total_processing_time_sec is not None)
-    if rtf is None or not is_measured:
+    is_measured = (performance_qc.total_processing_time_sec is not None) and (rtf is not None)
+    if not is_measured:
         perf_score = None
-        perf_status = "NOT MEASURED"
+        perf_status = "UN-EVALUATED"
     elif rtf <= 1.0:
         perf_score = 10.0
         perf_status = "PASS"
@@ -81,9 +81,9 @@ def compute_production_scorecard(
     # Recommendation logic based on Decision Process (Section 16 & 51)
     if not technical_qc.passed:
         recommendation = "REJECTED (Technical integrity check failed)"
-    elif quality_score >= 7.8 and perf_status in ("PASS", "NOT MEASURED"):
+    elif quality_score >= 7.8 and perf_status in ("PASS", "UN-EVALUATED", "NOT MEASURED"):
         recommendation = "PRODUCTION CANDIDATE" if perf_status == "PASS" else "PRODUCTION CANDIDATE (Quality: EXCELLENT; measure on 3x L40S to verify RTF)"
-    elif quality_score >= 6.5 and perf_status in ("PASS", "WARN", "NOT MEASURED"):
+    elif quality_score >= 6.5 and perf_status in ("PASS", "WARN", "UN-EVALUATED", "NOT MEASURED"):
         recommendation = "ACCEPTABLE WITH RESERVATIONS"
     elif perf_status == "FAIL":
         recommendation = "REJECTED (Performance below 1.0-1.3x realtime target)"

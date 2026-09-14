@@ -29,6 +29,7 @@ class VideoMetadata:
     color_space: Optional[str] = None
     color_primaries: Optional[str] = None
     color_transfer: Optional[str] = None
+    color_range: Optional[str] = None
     r_frame_rate: str = "25/1"
     avg_frame_rate: str = "25/1"
     nominal_fps: float = 25.0
@@ -85,6 +86,10 @@ class ChunkTask:
     checkpoint_path: Optional[str] = None
     scene_threshold: float = 0.35
     fp16: bool = True
+    color_space: Optional[str] = None
+    color_primaries: Optional[str] = None
+    color_transfer: Optional[str] = None
+    color_range: Optional[str] = None
 
 
 @dataclass

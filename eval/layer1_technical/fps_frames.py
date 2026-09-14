@@ -17,8 +17,8 @@ def validate_fps_and_frames(
     """
     warnings: List[str] = []
     
-    # 1. FPS validation: output should be close to 50.0 fps (or ~2x source nominal)
-    expected_fps = source_meta.nominal_fps * 2.0 if abs(source_meta.nominal_fps - 25.0) < 1.0 else target_fps
+    # 1. FPS validation: output should be 50.0 fps (25 -> 50 fps broadcast standard)
+    expected_fps = target_fps
     fps_delta = abs(output_meta.nominal_fps - expected_fps)
     avg_fps_delta = abs(output_meta.avg_fps - expected_fps)
     

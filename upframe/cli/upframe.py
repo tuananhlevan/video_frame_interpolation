@@ -61,6 +61,7 @@ def main() -> int:
         resume=config.resume,
         fp16=config.fp16,
         max_retries=config.max_retries,
+        workers=config.workers,
         log_dir=config.log_dir
     )
 

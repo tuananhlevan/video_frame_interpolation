@@ -32,6 +32,8 @@ def build_parser() -> argparse.ArgumentParser:
                         choices=["rife", "blend", "amt", "amt-s", "amt-l", "amt-g", "film", "ifrnet"],
                         help="VFI model to use (default: rife)")
     parser.add_argument("--gpus", default=None, help="Comma-separated GPU indices (e.g. '0,1,2') or 'cpu'")
+    parser.add_argument("--workers", "-w", type=int, default=None,
+                        help="Number of concurrent chunk workers (default: number of GPUs or 1 for CPU)")
     parser.add_argument("--chunk-size", type=int, default=1000, help="Frames per processing chunk (default: 1000)")
     parser.add_argument("--scene-threshold", type=float, default=0.35,
                         help="Scene cut sensitivity threshold [0.0 - 1.0] (default: 0.35)")
@@ -109,6 +111,8 @@ def parse_cli_args(args_list: Optional[List[str]] = None) -> Tuple[str, str, Pip
         config.resume = args.resume
     if args.gpus:
         config.gpus = parse_gpus(args.gpus)
+    if args.workers is not None:
+        config.workers = max(1, args.workers)
     config.fp16 = args.fp16
     if args.log_dir != "upframe_log" or not args.config:
         config.log_dir = args.log_dir

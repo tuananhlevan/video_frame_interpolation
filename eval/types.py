@@ -3,6 +3,7 @@
 from dataclasses import asdict, dataclass, field
 import json
 import os
+import time
 from typing import Any, Dict, List, Optional
 
 
@@ -141,7 +142,7 @@ class ScorecardResult:
     mos_is_surveyed: bool = False
     technical_status: str = "PASS"  # PASS, WARN, FAIL
     quality_status: str = "GOOD"  # EXCELLENT, GOOD, ACCEPTABLE, POOR, REJECTED
-    performance_status: str = "NOT MEASURED"  # PASS, WARN, FAIL, NOT MEASURED
+    performance_status: str = "UN-EVALUATED"  # PASS, WARN, FAIL, UN-EVALUATED
     recommendation: str = ""  # PRODUCTION CANDIDATE, ACCEPTABLE WITH RESERVATIONS, REJECTED
 
 
@@ -186,8 +187,15 @@ class EvaluationReport:
             json.dump(self.to_dict(), f, indent=2)
 
     def render_summary_text(self) -> str:
-        perf_score_str = f"{self.scorecard.performance_score:.1f} / 10.0 ({self.scorecard.performance_status})" if self.scorecard.performance_score is not None else f"N/A ({self.scorecard.performance_status})"
-        rtf_str = f"{self.scorecard.realtime_factor:.2f}x (Target: 1.0x - 1.3x)" if self.scorecard.realtime_factor is not None else "N/A (Offline eval; pass --processing-time for RTF)"
+        if self.scorecard.performance_score is not None:
+            perf_score_str = f"{self.scorecard.performance_score:.1f} / 10.0 ({self.scorecard.performance_status})"
+        else:
+            perf_score_str = f"Not found processing time ({self.scorecard.performance_status})"
+
+        if self.scorecard.realtime_factor is not None:
+            rtf_str = f"{self.scorecard.realtime_factor:.2f}x (Target: 1.0x - 1.3x)"
+        else:
+            rtf_str = f"Not found processing time ({self.scorecard.performance_status})"
         mos_label = "Human MOS (Surveyed):" if self.scorecard.mos_is_surveyed else "Predicted MOS (Proxy):"
 
         lines = [
@@ -199,6 +207,7 @@ class EvaluationReport:
             f"Model:               {self.model_name.upper()}",
             f"Resolution:          {self.resolution}",
             f"Duration:            {self.output_duration_str}",
+            f"Evaluation Time:     {time.strftime('%Y-%m-%d %H:%M:%S')}",
             "-" * 60,
             "SCORECARD",
             f"  Quality Score:     {self.scorecard.quality_score:.1f} / 10.0 ({self.scorecard.quality_status})",

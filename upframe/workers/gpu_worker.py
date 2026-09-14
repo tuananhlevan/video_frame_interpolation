@@ -71,7 +71,11 @@ class GPUWorker:
                         fps=50.0,
                         crf=14,
                         preset="ultrafast",
-                        use_nvenc=False
+                        use_nvenc=False,
+                        color_space=task.color_space,
+                        color_primaries=task.color_primaries,
+                        color_transfer=task.color_transfer,
+                        color_range=task.color_range
                     )
                     encoder.start()
                     encoder.write_frame(source_frames[0])
@@ -93,7 +97,11 @@ class GPUWorker:
                 fps=50.0,
                 crf=14,
                 preset="ultrafast",
-                use_nvenc=False
+                use_nvenc=False,
+                color_space=task.color_space,
+                color_primaries=task.color_primaries,
+                color_transfer=task.color_transfer,
+                color_range=task.color_range
             )
             encoder.start()
 

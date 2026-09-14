@@ -89,6 +89,7 @@ def probe_video(filepath: str, ffprobe_bin: str = "ffprobe") -> VideoMetadata:
     color_space = video_stream.get("color_space")
     color_primaries = video_stream.get("color_primaries")
     color_transfer = video_stream.get("color_transfer")
+    color_range = video_stream.get("color_range")
 
     r_frame_rate = video_stream.get("r_frame_rate", "25/1")
     avg_frame_rate = video_stream.get("avg_frame_rate", "25/1")
@@ -112,8 +113,19 @@ def probe_video(filepath: str, ffprobe_bin: str = "ffprobe") -> VideoMetadata:
         except ValueError:
             pass
 
-    if nb_frames == 0 and duration > 0 and avg_fps > 0:
-        nb_frames = int(round(duration * avg_fps))
+    # Validate container nb_frames against duration * fps (handles clipped videos with stale atom headers)
+    fps_for_est = nominal_fps if nominal_fps > 0 else avg_fps
+    if duration > 0 and fps_for_est > 0:
+        duration_est_frames = int(round(duration * fps_for_est))
+        if nb_frames == 0:
+            nb_frames = duration_est_frames
+        elif abs(nb_frames - duration_est_frames) > max(3, int(fps_for_est * 0.2)):
+            logger.warning(
+                f"Container metadata nb_frames ({nb_frames}) differs significantly from "
+                f"duration-based frame count ({duration_est_frames} frames for {duration:.2f}s @ {fps_for_est:.2f} fps). "
+                f"Reconciling to {duration_est_frames}."
+            )
+            nb_frames = duration_est_frames
 
     time_base = video_stream.get("time_base", "1/1000")
     try:
@@ -135,6 +147,7 @@ def probe_video(filepath: str, ffprobe_bin: str = "ffprobe") -> VideoMetadata:
         color_space=color_space,
         color_primaries=color_primaries,
         color_transfer=color_transfer,
+        color_range=color_range,
         r_frame_rate=r_frame_rate,
         avg_frame_rate=avg_frame_rate,
         nominal_fps=nominal_fps,

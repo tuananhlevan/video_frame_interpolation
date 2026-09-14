@@ -35,10 +35,15 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--eval-dir", "-d", default=None, help="Directory for evaluation artifacts (defaults to evaluation_log/<output_video_name>)")
     run_p.add_argument("--max-frames", type=int, default=None, help="Max source frames to evaluate (for quick runs)")
     run_p.add_argument("--sample-stride", type=int, default=1, help="Evaluation sample stride (1=all frames)")
+    run_p.add_argument("--source-baseline-stride", type=int, default=5, help="Stride for baseline source artifact measurement (default: 5)")
     run_p.add_argument("--no-visuals", action="store_true", help="Disable generation of visual clips and images")
+    run_p.add_argument("--generate-slowmo", action="store_true", help="Enable generation of slow-motion review clips")
     run_p.add_argument("--gt", default=None, help="Optional true ground-truth video for full-reference metrics")
     run_p.add_argument("--human-mos-file", default=None, help="Optional JSON file with human MOS survey responses")
     run_p.add_argument("--processing-time", type=float, default=None, help="Production processing time in seconds (for RTF)")
+    run_p.add_argument("--upframe-log", default=None, help="Path to upframe log/report file to extract processing time")
+    run_p.add_argument("--workers", "-w", type=int, default=1, help="Number of parallel evaluation workers (default: 1)")
+    run_p.add_argument("--gpus", default=None, help="Comma-separated GPU indices (e.g. '0,1,2') or None for CPU")
 
     # 2. benchmark command
     bm_p = subparsers.add_parser("benchmark", help="Benchmark and compare multiple VFI models side-by-side")
@@ -50,6 +55,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bm_p.add_argument("--eval-dir", "-d", default=None, help="Directory for benchmark artifacts (defaults to evaluation_log/benchmark_<source_video_name>)")
     bm_p.add_argument("--max-frames", type=int, default=None, help="Max source frames to evaluate")
+    bm_p.add_argument("--workers", "-w", type=int, default=1, help="Number of parallel evaluation workers (default: 1)")
+    bm_p.add_argument("--gpus", default=None, help="Comma-separated GPU indices (e.g. '0,1,2') or None for CPU")
 
     # 3. ground-truth command
     gt_p = subparsers.add_parser("ground-truth", help="Evaluate against high-FPS true ground truth footage")
@@ -89,9 +96,14 @@ def handle_run(args: argparse.Namespace) -> int:
         eval_dir=target_eval_dir,
         max_frames=args.max_frames,
         sample_stride=args.sample_stride,
+        source_baseline_stride=args.source_baseline_stride,
         generate_visuals=not args.no_visuals,
+        generate_slowmo=args.generate_slowmo,
         ground_truth_path=args.gt,
-        human_mos_file=args.human_mos_file
+        human_mos_file=args.human_mos_file,
+        upframe_log_path=args.upframe_log,
+        workers=args.workers,
+        gpus=args.gpus
     )
     evaluator = EvaluationPipeline(config=config)
     report = evaluator.evaluate(
@@ -133,6 +145,8 @@ def handle_benchmark(args: argparse.Namespace) -> int:
         config = EvaluationConfig(
             eval_dir=model_eval_dir,
             max_frames=args.max_frames,
+            workers=args.workers,
+            gpus=args.gpus,
             generate_visuals=True
         )
         evaluator = EvaluationPipeline(config=config)

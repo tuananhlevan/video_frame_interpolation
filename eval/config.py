@@ -38,7 +38,7 @@ class FootballScoreWeights:
 @dataclass
 class TechnicalThresholds:
     """Pass/warn/fail thresholds for Layer 1 Technical Integrity."""
-    min_psnr_source_preservation: float = 30.0  # dB (<30 fails, 30-35 warns, >35 passes)
+    min_psnr_source_preservation: float = 30.0  # dB (<30 fails unless verified by source comparative reasoning)
     min_ssim_source_preservation: float = 0.90  # (<0.90 fails, 0.90-0.96 warns, >0.96 passes)
     max_mae_source_preservation: float = 8.0  # [0, 255]
     max_frame_count_diff: int = 5
@@ -59,14 +59,17 @@ class EvaluationConfig:
     """Master evaluation configuration."""
     eval_dir: str = "evaluation_log"
     sample_stride: int = 1  # 1 = full evaluation, N = subsample every Nth interval
+    source_baseline_stride: int = 5  # sample every 5th frame for baseline compression noise
     max_frames: Optional[int] = None  # limit frames evaluated (for quick benchmarking)
+    workers: int = 1  # number of parallel evaluation workers (default: 1)
+    gpus: Optional[str] = None  # comma-separated GPU indices (e.g. '0,1,2') or None for CPU
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     
     # Visualization toggles
     generate_visuals: bool = True
     extract_injected_frames: bool = True
     max_injected_frames_to_save: int = 50
-    generate_slowmo: bool = True
+    generate_slowmo: bool = False
     slowmo_rates: List[int] = field(default_factory=lambda: [2, 4])
     slowmo_duration_sec: float = 5.0
     generate_diff_maps: bool = True
@@ -89,3 +92,6 @@ class EvaluationConfig:
     
     # Ground truth comparison video (optional)
     ground_truth_path: Optional[str] = None
+    
+    # Path to upframe execution log/report (optional)
+    upframe_log_path: Optional[str] = None

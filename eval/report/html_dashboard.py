@@ -19,7 +19,9 @@ def render_html_dashboard(report: EvaluationReport, output_path: str) -> str:
     # Status pill color helper
     def status_pill(status: str) -> str:
         s = status.upper()
-        if "PASS" in s or "EXCELLENT" in s or "CANDIDATE" in s:
+        if "UN-EVALUATED" in s or "NOT MEASURED" in s:
+            return f'<span class="badge" style="background: rgba(148, 163, 184, 0.2); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.4);">{html.escape(status)}</span>'
+        elif "PASS" in s or "EXCELLENT" in s or "CANDIDATE" in s:
             return f'<span class="badge badge-pass">{html.escape(status)}</span>'
         elif "WARN" in s or "ACCEPTABLE" in s or "GOOD" in s:
             return f'<span class="badge badge-warn">{html.escape(status)}</span>'
@@ -155,13 +157,13 @@ def render_html_dashboard(report: EvaluationReport, output_path: str) -> str:
             </div>
             <div class="card">
                 <div class="card-title">Performance Score</div>
-                <div class="card-value">{card.performance_score:.1f} <span style="font-size: 16px; color: var(--text-dim);">/ 10</span></div>
+                <div class="card-value">{f"{card.performance_score:.1f}" if card.performance_score is not None else "Not Found"} <span style="font-size: 16px; color: var(--text-dim);">{f"/ 10" if card.performance_score is not None else ""}</span></div>
                 <div class="card-sub">{status_pill(card.performance_status)}</div>
             </div>
             <div class="card">
                 <div class="card-title">Realtime Factor (RTF)</div>
-                <div class="card-value">{card.realtime_factor:.2f}x</div>
-                <div class="card-sub">Target: 1.0x &ndash; 1.3x</div>
+                <div class="card-value">{f"{card.realtime_factor:.2f}x" if card.realtime_factor is not None else "Not Found"}</div>
+                <div class="card-sub">{f"Target: 1.0x &ndash; 1.3x" if card.realtime_factor is not None else "Not found processing time"}</div>
             </div>
             <div class="card">
                 <div class="card-title">Perceptual Human MOS</div>

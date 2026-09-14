@@ -10,14 +10,44 @@ import cv2
 import numpy as np
 
 
+_dis_instance = None
+_grid_cache: Dict[Tuple[int, int], Tuple[np.ndarray, np.ndarray]] = {}
+
+
+def _get_dis_flow():
+    global _dis_instance
+    if _dis_instance is None:
+        try:
+            _dis_instance = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_FAST)
+        except Exception:
+            _dis_instance = False
+    return _dis_instance if _dis_instance is not False else None
+
+
+def _get_cached_grid(w: int, h: int) -> Tuple[np.ndarray, np.ndarray]:
+    key = (w, h)
+    if key not in _grid_cache:
+        grid_x, grid_y = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+        _grid_cache[key] = (grid_x, grid_y)
+    return _grid_cache[key]
+
+
 def compute_dense_flow(img_a: np.ndarray, img_b: np.ndarray) -> np.ndarray:
-    """Computes dense optical flow from img_a to img_b using Farneback.
+    """Computes dense optical flow from img_a to img_b using OpenCV DIS (or Farneback fallback).
     
     Returns:
         flow: [H, W, 2] in pixels
     """
     gray_a = cv2.cvtColor(img_a, cv2.COLOR_BGR2GRAY) if img_a.ndim == 3 else img_a
     gray_b = cv2.cvtColor(img_b, cv2.COLOR_BGR2GRAY) if img_b.ndim == 3 else img_b
+
+    dis = _get_dis_flow()
+    if dis is not None:
+        try:
+            return dis.calc(gray_a, gray_b, None)
+        except Exception:
+            pass
+
     flow = cv2.calcOpticalFlowFarneback(
         gray_a, gray_b, None,
         pyr_scale=0.5, levels=3, winsize=15, iterations=3, poly_n=5, poly_sigma=1.2, flags=0
@@ -28,9 +58,9 @@ def compute_dense_flow(img_a: np.ndarray, img_b: np.ndarray) -> np.ndarray:
 def warp_frame(img: np.ndarray, flow: np.ndarray) -> np.ndarray:
     """Warps an image using backward mapping optical flow [H, W, 2]."""
     h, w = img.shape[:2]
-    grid_x, grid_y = np.meshgrid(np.arange(w), np.arange(h))
-    map_x = (grid_x + flow[..., 0]).astype(np.float32)
-    map_y = (grid_y + flow[..., 1]).astype(np.float32)
+    grid_x, grid_y = _get_cached_grid(w, h)
+    map_x = grid_x + flow[..., 0]
+    map_y = grid_y + flow[..., 1]
     warped = cv2.remap(img, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
     return warped
 

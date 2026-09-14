@@ -1,0 +1,184 @@
+================================================================================
+CRITICAL ANALYSIS: BALL INTEGRITY SCORING FORMULA FLAWS & EDGE CASES
+================================================================================
+Codebase Location:
+  - Implementation: eval/layer3_football/ball.py
+  - Streaming Pipeline: eval/pipeline.py (lines 794-801)
+  - Parallel Engine: eval/parallel/engine.py (lines 733-740)
+  - Unit Tests: tests/test_ball_integrity.py
+
+--------------------------------------------------------------------------------
+1. CURRENT FORMULA RECAP
+--------------------------------------------------------------------------------
+The current ball integrity score is evaluated on a 1.0 to 5.0 scale:
+
+    tracked_count = len(trajectories)
+    dup_rate = duplicate_ball_events / max(1, tracked_count)
+    tel_rate = teleportation_count / max(1, tracked_count)
+
+    score = 5.0 - min(2.0, (dup_rate / 0.05) * 2.0) - min(2.0, (tel_rate / 0.05) * 2.0)
+    final_score = max(1.0, min(5.0, score))
+
+While the output is mathematically bounded within [1.0, 5.0], several algorithmic
+and practical flaws exist in production broadcast evaluation.
+
+--------------------------------------------------------------------------------
+2. IDENTIFIED FLAWS & EDGE CASES
+--------------------------------------------------------------------------------
+
+[FLAW 1] The "Invisible / Dissolved Ball" Paradox (Missing Ball = Perfect 5.0)
+------------------------------------------------------------------------------
+* Observation:
+  If a frame interpolation model completely dissolves, erases, or fails to 
+  reconstruct the ball across the clip (or if ball candidate detection fails 
+  completely), no candidates are detected. Consequently:
+      len(trajectories) == 0  -->  tracked_count = 0
+      duplicate_ball_events = 0
+      teleportation_count = 0
+  Plugging into the formula:
+      dup_rate = 0 / 1 = 0.0
+      tel_rate = 0 / 1 = 0.0
+      score = 5.0 - 0.0 - 0.0 = 5.0  (PERFECT SCORE)
+
+* Impact:
+  The worst possible model output (ball completely wiped out by interpolation)
+  receives the maximum possible score of 5.0 / 5.0.
+
+* Root Cause:
+  The score only penalizes relative anomalies among detected positions; it does
+  not enforce a ball presence / track retention rate.
+
+
+[FLAW 2] Extreme Sensitivity on Short Clips (The 5% Saturation Cliff)
+------------------------------------------------------------------------------
+* Observation:
+  The penalty multiplier is (rate / 0.05) * 2.0. This means any anomaly rate 
+  greater than or equal to 5.0% hits the maximum 2.0 point penalty.
+  
+  When testing on shorter clips or using the '--max-frames' parameter (e.g., 20 
+  or 50 frames):
+    - With 20 tracked frames: 1 single spurious event = 1 / 20 = 5.0% rate.
+      This immediately deducts the full 2.0 points, dropping the score from 
+      5.0 to 3.0.
+    - With 10 tracked frames: 1 event = 10.0% rate, capping out at 2.0 penalty.
+
+* Impact:
+  In sports broadcast video, a single contour noise event or edge-of-screen 
+  flicker disproportionately degrades the overall evaluation score on short runs.
+
+
+[FLAW 3] Tracker State Poisoning & Double Teleportation Penalties
+------------------------------------------------------------------------------
+* Observation (eval/layer3_football/ball.py lines 123-131):
+      closest = candidates[0]
+      dist = math.hypot(closest[0] - prev_pos[0], closest[1] - prev_pos[1])
+      if dist > allowed_displacement:
+          teleportation_count += 1
+      best_candidate = (closest[0], closest[1])
+      trajectories.append(best_candidate)
+      prev_pos = best_candidate  # <-- SNAPS TO THE OUTLIER
+
+* Impact:
+  When a noisy artifact (e.g., a white cleat or referee badge) appears far from
+  the real ball:
+    1. In Frame N: dist > allowed_displacement -> teleportation_count += 1.
+       prev_pos is set to the noisy outlier coordinate.
+    2. In Frame N+1: The real ball is detected at its genuine position.
+       The distance between the outlier prev_pos and the real ball again exceeds
+       allowed_displacement -> teleportation_count += 1.
+  A single transient noise artifact produces TWO consecutive teleportation 
+  penalties (10% penalty on a 20-frame clip), instantly hitting the penalty cap.
+
+
+[FLAW 4] Denominator & Unit Mismatch for Duplicate Events
+------------------------------------------------------------------------------
+* Observation (eval/layer3_football/ball.py lines 106-112):
+      if len(candidates) >= 2:
+          for i in range(len(candidates)):
+              for j in range(i + 1, len(candidates)):
+                  dist = math.hypot(...)
+                  if 10.0 <= dist <= 60.0:
+                      duplicate_ball_events += 1
+
+* Impact:
+  - If 3 candidates cluster together in a single frame, duplicate_ball_events 
+    increments by up to 3 in that single frame.
+  - duplicate_ball_events is an event-pair counter, but tracked_count is a 
+    frame counter.
+  - Dividing an event count by a frame count creates a ratio that can exceed 
+    1.0, unlike a true percentage of contaminated frames.
+
+
+[FLAW 5] Occlusion Bridging Discontinuity and Excessive Displacement
+------------------------------------------------------------------------------
+* Observation:
+      allowed_displacement = base_velocity_limit * (frames_since_last_seen + 1)
+      base_velocity_limit = 130 px (at 50 fps)
+      max_lost_gap_frames = 6
+
+* Impact:
+  - At frames_since_last_seen = 6:
+    allowed_displacement = 130 * 7 = 910 pixels.
+    In a 1920x1080 frame, 910 px is roughly half the width of the entire screen.
+    Almost any arbitrary detection across the field is accepted without penalty.
+  - At frames_since_last_seen = 7:
+    The tracker resets (prev_pos = None). When the ball reappears, it is 
+    treated as a brand-new track with 0 teleportation penalty.
+  - This creates an arbitrary discontinuity where a 6-frame occlusion permits
+    a 910 px jump, but a 7-frame occlusion incurs zero penalty regardless of
+    where the ball reappears.
+
+
+[FLAW 6] Unaccounted Shape Degradation (Filter vs. Penalty)
+------------------------------------------------------------------------------
+* Observation:
+  The module docstring explicitly lists:
+    "- shape integrity (not unnaturally stretched or dissolved)"
+  However, in detect_ball_candidates():
+    circularity >= 0.55
+    20 <= area <= 600
+  These thresholds act as hard rejection filters. If an interpolated frame 
+  produces an unnaturally deformed, blurred, or stretched ball (circularity < 0.55),
+  the candidate is simply discarded. It does not record a shape deformation 
+  penalty; instead, it is treated as a missing ball (which, per Flaw 1, is not 
+  penalized).
+
+
+[FLAW 7] Rigid Distance Window for Duplicate Detection [10 px, 60 px]
+------------------------------------------------------------------------------
+* Observation:
+  - If dist < 10 px: Fragmented contours or overlapping ghost artifacts are ignored.
+  - If dist > 60 px: In fast-action sequences (e.g., hard strikes where ball moves 
+    at 80-120 px/frame), a trailing ghost ball produced by frame blending will be 
+    separated by > 60 px and will fail to be flagged as a duplicate ball.
+
+--------------------------------------------------------------------------------
+3. RECOMMENDED FIXES & REVISED FORMULATION
+--------------------------------------------------------------------------------
+
+1. Add Track Presence / Retention Score:
+   Track presence ratio = tracked_count / max(1, total_eval_frames)
+   If track presence is below a threshold (e.g., < 0.20 when source has ball),
+   penalize the score or report INSUFFICIENT_TRACKING.
+
+2. Outlier Rejection / Gating (Prevent State Poisoning):
+   If dist > allowed_displacement:
+       teleportation_count += 1
+       # Do NOT update prev_pos to outlier; treat ball as lost for this frame
+       frames_since_last_seen += 1
+   Only update prev_pos when a kinematically plausible candidate is found.
+
+3. Frame-Level Duplicate Accounting:
+   Instead of counting pairwise events, flag contaminated frames:
+       frame_has_duplicate = any(10.0 <= dist <= max_dist ...)
+       duplicate_frames_count += 1 if frame_has_duplicate else 0
+       dup_rate = duplicate_frames_count / max(1, tracked_count)
+
+4. Velocity-Adaptive Ghost Distance:
+   Scale the maximum duplicate search distance based on recent ball velocity:
+       max_dup_dist = max(60.0, current_velocity * 1.2)
+
+5. Softer Penalty Scaling:
+   Replace the sharp 5% linear cutoff with a smoother ramp (e.g., 10% saturation
+   or non-linear curve) to prevent 1 noise event on short clips from deducting 2.0 points.
+================================================================================

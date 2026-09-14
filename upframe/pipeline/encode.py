@@ -24,6 +24,10 @@ class VideoEncoder:
         preset: str = "medium",
         use_nvenc: Optional[bool] = None,
         bitrate: Optional[str] = None,
+        color_space: Optional[str] = None,
+        color_primaries: Optional[str] = None,
+        color_transfer: Optional[str] = None,
+        color_range: Optional[str] = None,
         ffmpeg_bin: str = "ffmpeg"
     ) -> None:
         self.output_filepath = os.path.abspath(output_filepath)
@@ -36,6 +40,10 @@ class VideoEncoder:
         self.ffmpeg_bin = find_binary(ffmpeg_bin)
         self.frame_bytes = width * height * 3
         self.bitrate = bitrate
+        self.color_space = color_space
+        self.color_primaries = color_primaries
+        self.color_transfer = color_transfer
+        self.color_range = color_range
 
         if use_nvenc is True:
             if not is_nvenc_available(self.ffmpeg_bin):
@@ -88,12 +96,36 @@ class VideoEncoder:
                 "-crf", str(self.crf)
             ])
 
-        # Standard broadcast video formatting: yuv420p + BT.709 color tags
+        # Dynamically adapt color matrix and color range based on source metadata:
+        # 1. Color Matrix:
+        cs = (self.color_space or "").lower()
+        if any(x in cs for x in ["bt2020", "2020"]):
+            out_matrix = "bt2020"
+            tag_space = "bt2020nc"
+            tag_primaries = self.color_primaries or "bt2020"
+            tag_trc = self.color_transfer or "smpte2084"
+        elif any(x in cs for x in ["601", "170m", "470bg", "smpte170"]):
+            out_matrix = "bt601"
+            tag_space = "smpte170m"
+            tag_primaries = self.color_primaries or "smpte170m"
+            tag_trc = self.color_transfer or "smpte170m"
+        else:
+            # Universal default for HD / 1080p / 720p SDR broadcast & web
+            out_matrix = "bt709"
+            tag_space = "bt709"
+            tag_primaries = self.color_primaries or "bt709"
+            tag_trc = self.color_transfer or "bt709"
+
+        # 2. Color Range (TV/limited [16-235] vs PC/full [0-255]):
+        cr = (self.color_range or "").lower()
+        out_range = "pc" if cr in ("pc", "full") else "tv"
+
         cmd.extend([
+            "-vf", f"scale=out_color_matrix={out_matrix}:out_range={out_range}",
             "-pix_fmt", "yuv420p",
-            "-colorspace", "bt709",
-            "-color_primaries", "bt709",
-            "-color_trc", "bt709"
+            "-colorspace", tag_space,
+            "-color_primaries", tag_primaries,
+            "-color_trc", tag_trc
         ])
 
         # Audio stream-copy
