@@ -298,19 +298,19 @@ def evaluate_chunk_worker(task: ChunkEvaluationTask) -> ChunkEvaluationOutput:
                 players = detect_player_blobs(frame)
                 out.total_players_checked += len(players)
 
-                candidates = detect_ball_candidates(frame, players=players, min_circularity=0.40)
+                candidates = detect_ball_candidates(frame, players=players, min_circularity=0.50)
 
                 best_candidate = None
                 if candidates:
                     if prev_ball_pos is None:
                         candidates.sort(key=lambda x: x[3], reverse=True)
-                        if candidates[0][3] >= 0.50:
+                        if candidates[0][3] >= 0.55:
                             best_candidate = candidates[0]
                             out.ball_trajectories.append((best_candidate[0], best_candidate[1]))
                             prev_prev_ball_pos = prev_ball_pos
                             prev_ball_pos = (best_candidate[0], best_candidate[1])
                             ball_frames_since_last_seen = 0
-                            if candidates[0][3] < 0.55:
+                            if candidates[0][3] < 0.65:
                                 out.deformed_ball_events += 1
                     else:
                         allowed_displacement = base_ball_velocity * (ball_frames_since_last_seen + 1)
@@ -329,7 +329,7 @@ def evaluate_chunk_worker(task: ChunkEvaluationTask) -> ChunkEvaluationOutput:
                             prev_prev_ball_pos = prev_ball_pos
                             prev_ball_pos = (best_candidate[0], best_candidate[1])
                             ball_frames_since_last_seen = 0
-                            if closest[3] < 0.55:
+                            if closest[3] < 0.65:
                                 out.deformed_ball_events += 1
                 else:
                     ball_frames_since_last_seen += 1

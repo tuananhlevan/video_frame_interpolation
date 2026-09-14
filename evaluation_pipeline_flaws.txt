@@ -1,0 +1,534 @@
+================================================================================
+UPFRAME EVALUATION PIPELINE: COMPREHENSIVE FLAW ANALYSIS & AUDIT REPORT
+================================================================================
+Target Repository: /home/levantuananh/VDT_VT/video_frame_interpolation
+Module Analyzed:   eval/ (Layers 1, 2, 3, and 4)
+Companion Report:  ball_integrity_flaws.txt (deep-dive on Ball Integrity)
+
+--------------------------------------------------------------------------------
+TABLE OF CONTENTS
+--------------------------------------------------------------------------------
+1. ARCHITECTURAL OVERVIEW
+2. LAYER 1 (TECHNICAL INTEGRITY) FLAWS
+   1.1 Standalone Scene Cut Temporal Off-by-One Alignment Bug
+   1.2 Audio Container Duration vs. True Acoustic / Lip-Sync Lag
+   1.3 Silent Exception Swallowing in Source Preservation Stream
+3. LAYER 2 (TEMPORAL STABILITY & MOTION) FLAWS
+   2.1 Global Translation Blindness in Motion Smoothness (Phase Correlation)
+   2.2 Un-normalized Raw Count Discontinuity Penalty in Smoothness
+   2.3 Optical Flow Warping Direction & Remap Inversion Bug
+   2.4 Occlusion Doubling / Ghosting in Synthetic Optical Flow Reference
+   2.5 High-Speed Sports Motion Misclassified as Temporal Flicker
+4. LAYER 3 (FOOTBALL DOMAIN-SPECIFIC QC) FLAWS
+   3.1 Pitch Geometry Angle Variance (Perpendicular Lines & Directionality)
+   3.2 Pitch Line Count Variance Penalizing Natural Camera Panning
+   3.3 Whole-Frame Laplacian Variance for Goal Net Integrity
+   3.4 Fixed ROI Assumptions in Broadcast Graphics (Clean Feeds & Crowd)
+   3.5 Bounding Box Overlap vs. True Player Occlusion
+   3.6 Plain/Monochrome Kits Misidentified as Occlusion Failures
+   3.7 Hardcoded Dummy Metrics in Artifact Differential Fallback
+5. LAYER 4 (PERCEPTUAL QUALITY & SCORECARD) FLAWS
+   4.1 Circular Double-Counting of Layer 3 Scores in Automated MOS
+6. SUMMARY & REMEDIATION ROADMAP
+
+================================================================================
+1. ARCHITECTURAL OVERVIEW
+================================================================================
+The evaluation suite evaluates 25 FPS -> 50 FPS video frame interpolation (VFI)
+models across 4 progressive layers:
+  - Layer 1: Technical & Pipeline Integrity (codec, FPS, PTS, source preservation, cuts)
+  - Layer 2: Temporal Stability & Motion (smoothness, optical flow, flicker)
+  - Layer 3: Football Domain-Specific QC (ball, players, pitch lines, goal net, graphics)
+  - Layer 4: Perceptual Quality & Scorecard (MOS aggregation, weighted 0-10 Quality Score)
+
+While the multi-layer concept is solid, rigid heuristic assumptions and several
+concrete bugs cause significant false-positive quality penalties on clean
+broadcast video.
+
+================================================================================
+2. LAYER 1 (TECHNICAL INTEGRITY) FLAWS
+================================================================================
+
+--------------------------------------------------------------------------------
+[FLAW 1.1] Standalone Scene Cut Temporal Off-by-One Alignment Bug
+--------------------------------------------------------------------------------
+* Location: eval/layer1_technical/scene_cuts.py (lines 47-79)
+* Vulnerable Code:
+      # In loop iteration for src_idx:
+      frame_src = next(stream_src)
+      frame_out_even = next(stream_out)  # Output index 2 * src_idx
+      frame_out_odd = next(stream_out)   # Output index 2 * src_idx + 1
+
+      if prev_frame_src is not None:
+          diff = compute_frame_difference(prev_frame_src, frame_src)
+          if diff >= cut_threshold:
+              cut_idx = src_idx - 1
+              if frame_out_odd is not None:
+                  frame_inter = frame_out_odd  # <--- CRITICAL BUG
+                  # Checks if frame_inter is a hybrid blend of prev_frame_src and frame_src
+
+* Why this is a flaw:
+  Consider the timeline for source frames S0, S1 and output frames O0, O1, O2, O3:
+    - S0 corresponds to O0 (even). O1 is intermediate between S0 and S1.
+    - S1 corresponds to O2 (even). O3 is intermediate between S1 and S2.
+  When evaluating the cut transition S0 -> S1 (at loop iteration src_idx = 1):
+    - prev_frame_src is S0.
+    - frame_src is S1.
+    - The cut occurs between S0 and S1.
+    - The output frame that must NOT be a hybrid blend is O1.
+  However, in iteration src_idx = 1, the code reads:
+    - frame_out_even = O2
+    - frame_out_odd = O3
+  The code sets `frame_inter = frame_out_odd` (which is O3, the frame between
+  S1 and S2)! O1 was already read and discarded during the previous iteration
+  (src_idx = 0).
+  
+  Consequently, it compares O3 against S0 and S1. Because O3 belongs to the new
+  scene S1->S2, comparing O3 against S0 naturally yields large difference
+  (diff_to_a > 0.20 and diff_to_b > 0.20), triggering false-positive hybrid cut
+  failure warnings!
+  *(Note: eval/pipeline.py avoided this by caching `prev_out_odd`, but the standalone
+  eval module in layer1_technical contains this off-by-one bug).*
+
+* Remediation:
+  Store `prev_out_odd` from the previous iteration and inspect `prev_out_odd`
+  when a cut is detected between `prev_frame_src` and `frame_src`.
+
+--------------------------------------------------------------------------------
+[FLAW 1.2] Audio Container Duration vs. True Acoustic / Lip-Sync Lag
+--------------------------------------------------------------------------------
+* Location: eval/layer1_technical/audio.py (lines 31-50)
+* Vulnerable Code:
+      src_a_dur = src_audio.duration or source_meta.duration
+      out_a_dur = out_audio.duration or output_meta.duration
+      dur_diff = abs(out_a_dur - src_a_dur)
+      passed = dur_diff <= max_duration_diff_sec
+
+* Why this is a flaw:
+  This check only reads the header metadata tags of the container.
+  If an encoder or muxer introduces an audio timeline delay/offset (e.g., +300ms
+  PTS shift), or if frame interpolation causes video clock drift, the total
+  duration of the audio stream can remain identical while audio and video are
+  severely out of sync (whistle/commentary delay).
+  The validation reports `passed = True` despite noticeable A/V desynchronization.
+
+* Remediation:
+  Perform cross-correlation between the decoded audio stream track and video
+  event timestamps, or verify audio packet PTS start offsets relative to video PTS 0.
+
+--------------------------------------------------------------------------------
+[FLAW 1.3] Silent Exception Swallowing in Source Preservation Stream
+--------------------------------------------------------------------------------
+* Location: eval/layer1_technical/source_preservation.py (lines 151-152)
+* Vulnerable Code:
+      try:
+          ...
+      except Exception as e:
+          pass
+
+* Why this is a flaw:
+  If a decoder error, pipe breakage, or corrupt frame occurs at frame 5 of a
+  10,000-frame match, the entire comparison loop terminates silently without
+  raising or logging the error.
+  It proceeds to compute mean PSNR on only those 5 frames, giving a clean pass
+  or failing with "No frames evaluated" without revealing the underlying crash.
+
+* Remediation:
+  Log exceptions with `logger.error(..., exc_info=True)` and explicitly record
+  early-termination status in the returned details dictionary.
+
+================================================================================
+3. LAYER 2 (TEMPORAL STABILITY & MOTION) FLAWS
+================================================================================
+
+--------------------------------------------------------------------------------
+[FLAW 2.1] Global Translation Blindness in Motion Smoothness (Phase Correlation)
+--------------------------------------------------------------------------------
+* Location: eval/layer2_temporal/smoothness.py (lines 17-20)
+* Vulnerable Code:
+      shift, response = cv2.phaseCorrelate(gray1.astype(np.float32), gray2.astype(np.float32))
+      dx, dy = shift
+      global_mag = float(np.sqrt(dx ** 2 + dy ** 2))
+
+* Why this is a flaw:
+  `cv2.phaseCorrelate` computes 2D Fourier phase correlation between two images.
+  By mathematical definition, phase correlation identifies the single dominant
+  global translation between two images (i.e., background camera pan/tilt).
+  
+  In football broadcast video, the background pitch constitutes 80-90% of the
+  pixels. If the camera is static or slow-panning, `shift` is close to (0, 0).
+  If an interpolated frame severely deforms a sprinting player, causes a limb
+  to snap, or jitters the football wildly, phase correlation remains (0, 0).
+  The smoothness metric is completely blind to foreground/object motion artifacts,
+  measuring only camera panning stability.
+
+* Remediation:
+  Compute motion smoothness over dense optical flow or tracked foreground
+  trajectories rather than whole-frame phase correlation.
+
+--------------------------------------------------------------------------------
+[FLAW 2.2] Un-normalized Raw Count Discontinuity Penalty in Smoothness
+--------------------------------------------------------------------------------
+* Location: eval/layer2_temporal/smoothness.py (line 63) & eval/pipeline.py (line 736)
+* Vulnerable Code:
+      discontinuity_penalty = min(0.6, len(discontinuity_indices) * 0.05)
+
+* Why this is a flaw:
+  `len(discontinuity_indices)` is a raw count, not a rate normalized by video duration.
+  - In a 50-frame clip (1 second), 12 jerky frames = 24% defect rate -> penalty = 0.60.
+  - In a 5,000-frame clip (100 seconds), 12 isolated hiccups = 0.24% defect rate (99.76% smooth)
+    -> penalty = 0.60 (the maximum possible penalty!).
+  Any video longer than ~10 seconds is almost guaranteed to hit the maximum 0.60
+  discontinuity penalty from normal broadcast camera switch handoffs.
+
+* Remediation:
+  Normalize by frame count:
+      discontinuity_rate = len(discontinuity_indices) / max(1, len(motion_vectors))
+      discontinuity_penalty = min(0.6, (discontinuity_rate / 0.02) * 0.6)
+
+--------------------------------------------------------------------------------
+[FLAW 2.3] Optical Flow Warping Direction & Remap Inversion Bug
+--------------------------------------------------------------------------------
+* Location: eval/layer2_temporal/optical_flow.py (lines 58-65, 96-107)
+* Vulnerable Code:
+      flow_ab = compute_dense_flow(frame_a, frame_b)  # Forward flow: A -> B
+      ...
+      pred_x_from_a = warp_frame(frame_a, flow_ab * 0.5)
+
+      def warp_frame(img: np.ndarray, flow: np.ndarray) -> np.ndarray:
+          grid_x, grid_y = _get_cached_grid(w, h)
+          map_x = grid_x + flow[..., 0]
+          map_y = grid_y + flow[..., 1]
+          warped = cv2.remap(img, map_x, map_y, interpolation=cv2.INTER_LINEAR, ...)
+          return warped
+
+* Why this is a flaw:
+  `cv2.remap` requires backward mapping coordinates: for each pixel coordinate
+  (x, y) in the *destination* image, map_x and map_y must specify which source
+  pixel in `img` to fetch from.
+  
+  `flow_ab` is forward flow computed from A to B: pixel (x, y) in A moves to
+  (x + u, y + v) in B.
+  Passing `grid + 0.5 * flow_ab` directly to `cv2.remap` interprets forward flow
+  as backward sample coordinates. If an object moves to the right (+u), `remap`
+  fetches from pixels further to the right in A, which shifts the object to the
+  *left* in the warped destination image.
+  The intermediate prediction `pred_x_from_a` is deformed and displaced in the
+  wrong direction, causing high synthetic warping errors against genuine frames.
+
+* Remediation:
+  Compute flow from the destination domain (intermediate frame) or invert the
+  forward flow using forward warping (e.g. forward splatting or backward flow calculation).
+
+--------------------------------------------------------------------------------
+[FLAW 2.4] Occlusion Doubling / Ghosting in Synthetic Optical Flow Reference
+--------------------------------------------------------------------------------
+* Location: eval/layer2_temporal/optical_flow.py (lines 109-114)
+* Vulnerable Code:
+      pred_x = (pred_x_from_a.astype(np.float32) * 0.5 + pred_x_from_b.astype(np.float32) * 0.5)
+      diff = np.abs(frame_generated.astype(np.float32) - pred_x)
+
+* Why this is a flaw:
+  Simple 50/50 averaging of forward-warped A and backward-warped B without
+  forward-backward consistency checking (occlusion masking) creates duplicate/ghost
+  edges wherever disocclusion or occlusion occurs (e.g., background revealed behind
+  a running player).
+  `pred_x` contains artificial ghosting. A state-of-the-art VFI model (like AMT or
+  RIFE) that correctly in-paints and reasons about occlusion will differ strongly
+  from this flawed `pred_x`, receiving high warping and boundary error penalties!
+
+* Remediation:
+  Implement forward-backward flow consistency check:
+      occlusion_mask = |flow_ab + flow_ba| > threshold
+  Weight predictions based on occlusion visibility rather than naive 50/50 blending.
+
+--------------------------------------------------------------------------------
+[FLAW 2.5] High-Speed Sports Motion Misclassified as Temporal Flicker
+--------------------------------------------------------------------------------
+* Location: eval/layer2_temporal/flicker.py (lines 31-33, 65-66)
+* Vulnerable Code:
+      for i in range(1, len(grays)):
+          d1 = float(np.mean(np.abs(grays[i] - grays[i - 1])))
+          consecutive_diffs.append(d1)
+      mean_d1 = float(np.mean(consecutive_diffs))
+      ...
+      flicker_score = float(mean_d1 * 0.1 + mean_var_flicker * 5.0)
+
+* Why this is a flaw:
+  `mean_d1` is the raw, uncompensated pixel intensity difference between
+  consecutive frames.
+  In high-speed sports broadcasting, camera pans across high-contrast pitch lines
+  or rapid counter-attacks naturally produce mean pixel intensity deltas of
+  25 to 40 levels per frame simply due to motion displacement.
+  Because `mean_d1 * 0.1` contributes 2.5 to 4.0 points directly to `flicker_score`,
+  fast, dynamic football action is heavily penalized as "flicker" even when there
+  is zero luminance oscillation.
+
+* Remediation:
+  Compute temporal flicker on motion-compensated residuals, or evaluate the
+  second temporal derivative (high-frequency temporal bandpass filter: F(t) - 2*F(t+1) + F(t+2)).
+
+================================================================================
+4. LAYER 3 (FOOTBALL DOMAIN-SPECIFIC QC) FLAWS
+================================================================================
+
+--------------------------------------------------------------------------------
+[FLAW 3.1] Pitch Geometry Angle Variance (Perpendicular Lines & Directionality)
+--------------------------------------------------------------------------------
+* Location: eval/layer3_football/pitch_geometry.py (lines 59-64)
+* Vulnerable Code:
+      if len(lines) >= 2:
+          angles = [np.arctan2(y2 - y1, x2 - x1) for x1, y1, x2, y2 in lines]
+          std_ang = float(np.std(angles))
+          if std_ang > 1.2:
+              wobble_events += 1
+
+* Why this is a flaw:
+  A standard football pitch consists of:
+    - Touchlines (near horizontal in broadcast perspective)
+    - Goal lines, halfway lines, and penalty box lines (perpendicular at ~90 degrees / 1.57 rad)
+    - Penalty arc and center circle (which HoughLinesP decomposes into segments at every angle)
+  Furthermore, `cv2.HoughLinesP` returns unoriented line endpoints. Depending on
+  which endpoint is listed first, `arctan2` returns theta or theta + pi (a 3.14 rad difference!).
+  
+  Whenever a frame captures a sideline and a penalty box line simultaneously,
+  the angles naturally span 0 and 1.57 rad (or -1.57 to +1.57 rad). The standard
+  deviation of these angles trivially exceeds 1.2 rad.
+  This causes perfectly straight, pristine football field geometry to be flagged
+  as warped or wobbling in almost every camera angle where a penalty box or halfway
+  line is visible.
+
+* Remediation:
+  1. Map all line angles to [0, pi) via `angle % np.pi`.
+  2. Cluster line angles into dominant perspective vanishing bundles (e.g. 2 orthogonal clusters)
+     and test variance within each bundle, rather than across all lines globally.
+
+--------------------------------------------------------------------------------
+[FLAW 3.2] Pitch Line Count Variance Penalizing Natural Camera Panning
+--------------------------------------------------------------------------------
+* Location: eval/layer3_football/pitch_geometry.py (lines 66-73)
+* Vulnerable Code:
+      count_variance = float(np.var(line_counts_per_frame)) if line_counts_per_frame else 0.0
+      score -= min(1.5, count_variance / 50.0)
+
+* Why this is a flaw:
+  In broadcast coverage, the camera continuously pans between the midfield (where
+  only 1 or 2 sidelines are in view) and the penalty area (where 8 to 12 lines
+  become visible: penalty box, 6-yard box, goal line, penalty spot, arc).
+  This natural transition causes high variance in the number of detected lines
+  per frame (`count_variance` > 75.0), automatically deducting the maximum 1.5
+  points from `pitch_score` solely because the camera panned across the field.
+
+* Remediation:
+  Measure line continuity / breakage along tracked individual line trajectories,
+  or use a local moving window variance rather than global sequence-wide variance.
+
+--------------------------------------------------------------------------------
+[FLAW 3.3] Whole-Frame Laplacian Variance for Goal Net Integrity
+--------------------------------------------------------------------------------
+* Location: eval/layer3_football/goal_net.py (lines 22-43)
+* Vulnerable Code:
+      for frame in frames_sequence:
+          gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) ...
+          _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+          lap_var = float(cv2.Laplacian(thresh, cv2.CV_32F).var())
+          laplacian_variances.append(lap_var)
+      ...
+      diff_ratio = abs(even_mean - odd_mean) / (even_mean + 1e-5)
+      if diff_ratio > 0.20:
+          score -= min(2.5, diff_ratio * 4.0)
+
+* Why this is a flaw:
+  1. **No Goal Localization**: The function does not detect whether a goal or net
+     is present in the video. It computes thresholding and Laplacian variance over
+     the *entire 1080p frame*.
+  2. **Midfield False Positives**: In clips featuring midfield play or corner kicks,
+     any bright objects (white player kits, white socks, LED board text, referee cards)
+     exceed the threshold of 200.
+  3. **Sensitivity**: When players wearing white jerseys run across the screen, the
+     high-frequency edge energy varies between frames. If `even_mean` is small (typical
+     when no actual goal net is in frame), `(even_mean - odd_mean) / (even_mean + 1e-5)`
+     fluctuates wildly (> 0.20), deducting up to 2.5 points from a video that has
+     no goal net at all!
+  4. **Arbitrary Default**: Baseline score starts at 4.8 instead of 5.0 for no
+     documented mathematical reason.
+
+* Remediation:
+  First run a goalpost/net detector (e.g. crossbar/post line detector or bounding box)
+  and only evaluate Laplacian mesh energy inside the verified goal ROI. If no goal
+  is detected, return 5.0 (or mark metric as N/A).
+
+--------------------------------------------------------------------------------
+[FLAW 3.4] Fixed ROI Assumptions in Broadcast Graphics (Clean Feeds & Crowd)
+--------------------------------------------------------------------------------
+* Location: eval/layer3_football/broadcast_graphics.py (lines 24-53)
+* Vulnerable Code:
+      # Hardcoded graphic regions:
+      # Top-left: Scoreboard (y: 0 to 18% H, x: 0 to 30% W)
+      # Top-right: Logo (y: 0 to 15% H, x: 75% to 98% W)
+      ...
+      edges1 = cv2.Canny(patch1.astype(np.uint8), 80, 180)
+      if np.sum(edges1) > 100:  # has graphic edges
+          edge_diff = float(np.mean(np.abs(patch1[edge_mask] - patch2[edge_mask])))
+
+* Why this is a flaw:
+  1. **Clean Feeds & ISO Cameras**: Many broadcast production feeds (world feeds,
+     stadium ISO cameras, referee review cameras) do NOT contain an on-screen
+     scoreboard or logo in the top-left or top-right.
+  2. **Crowd Misidentification**: In a stadium wide shot without graphics, the
+     top 15-18% of the frame captures spectators in the grandstand. The crowd
+     has thousands of high-contrast edges (`np.sum(edges1) >> 100`). When the camera
+     pans, spectators move across the ROI, producing high `edge_diff` (> 8.0).
+     The code assumes the crowd is a "jittering scoreboard" and severely penalizes
+     the video score (dropping it from 5.0 down to 2.0).
+  3. **Legitimate Clock Ticking**: Match clocks legitimately update digits every
+     second, creating regular edge differences.
+
+* Remediation:
+  Verify static temporal persistence: True broadcast graphics remain static in
+  screen space across multiple seconds regardless of camera pans. Only evaluate
+  graphics jitter on ROIs that demonstrate near-zero motion across 50+ frames.
+
+--------------------------------------------------------------------------------
+[FLAW 3.5] Bounding Box Overlap vs. True Player Occlusion
+--------------------------------------------------------------------------------
+* Location: eval/layer3_football/player_occlusion.py (lines 67-85)
+* Vulnerable Code:
+      ix = max(x1, x2); iy = max(y1, y2)
+      iw = min(x1 + w1, x2 + w2) - ix
+      ih = min(y1 + h1, y2 + h2) - iy
+      if iw > 5 and ih > 10:
+          occlusion_events += 1
+          roi = frame[iy:iy + ih, ix:ix + iw]
+          if cv2.Laplacian(gray_roi, cv2.CV_32F).var() < 50.0:
+              occlusion_failures += 1
+
+* Why this is a flaw:
+  1. **Bounding Box False Overlaps**: Players are vertical silhouettes. When two
+     players stand near each other in 3D perspective (e.g. one in foreground, one
+     in background), their rectangular bounding boxes overlap significantly even
+     when their bodily silhouettes do not touch.
+  2. The intersection ROI often contains empty pitch grass between the players.
+
+--------------------------------------------------------------------------------
+[FLAW 3.6] Plain/Monochrome Kits Misidentified as Occlusion Failures
+--------------------------------------------------------------------------------
+* Location: eval/layer3_football/player_occlusion.py (lines 82-85)
+* Vulnerable Code:
+      lap_var = cv2.Laplacian(gray_roi, cv2.CV_32F).var()
+      if lap_var < 50.0:
+          occlusion_failures += 1
+
+* Why this is a flaw:
+  The assumption is that an occlusion artifact creates a "blurry wash" with low
+  texture. However, many football teams wear solid, smooth monochrome kits (e.g.
+  solid navy blue, dark red, or black jerseys).
+  When two teammates in smooth kits stand close together, the overlapping jersey
+  region naturally has low texture (`lap_var < 50.0`) even in pristine 4K video.
+  The evaluation misclassifies genuine team uniforms as "occlusion failure artifacts".
+
+* Remediation:
+  Compare the overlap region against the source frames at the same location;
+  only flag an occlusion failure if texture sharpness drops significantly
+  relative to the source frames.
+
+--------------------------------------------------------------------------------
+[FLAW 3.7] Hardcoded Dummy Metrics in Artifact Differential Fallback
+--------------------------------------------------------------------------------
+* Location: eval/layer3_football/artifacts.py (lines 124-138)
+* Vulnerable Code:
+      if motion_magnitudes and len(motion_magnitudes) == len(out_double):
+          ...
+      else:
+          motion_breakdown = {
+              "low_motion_added": 0.003,
+              "med_motion_added": 0.012,
+              "high_motion_added": 0.038,
+              "very_high_motion_added": 0.085
+          }
+      ...
+      temporal_flicker=ArtifactMetric(source_level=0.02, output_level=0.03, added_level=0.01, severity_level=1)
+
+* Why this is a flaw:
+  If `motion_magnitudes` length fails to align with frame counts (common during
+  streaming frame drops or boundary frames), the code silently substitutes
+  hardcoded dummy numbers into the formal evaluation report.
+  Furthermore, `temporal_flicker` inside `ArtifactDifferentialResult` is permanently
+  hardcoded to fixed constants (0.02, 0.03, 0.01) rather than measured values.
+
+* Remediation:
+  Dynamically align array lengths using interpolation/truncation or mark missing
+  motion regime bins as unmeasured/NaN.
+
+================================================================================
+5. LAYER 4 (PERCEPTUAL QUALITY & SCORECARD) FLAWS
+================================================================================
+
+--------------------------------------------------------------------------------
+[FLAW 4.1] Circular Double-Counting of Layer 3 Scores in Automated MOS
+--------------------------------------------------------------------------------
+* Location: eval/pipeline.py (lines 199-209) & eval/layer4_perceptual/scorecard.py (lines 34-44)
+* Vulnerable Code:
+      # In pipeline.py:
+      auto_quality_estimate = float(np.mean([
+          football_qc.player_integrity_score,
+          football_qc.ball_integrity_score,
+          football_qc.occlusion_handling_score,
+          football_qc.pitch_geometry_score,
+          football_qc.broadcast_graphics_score,
+          football_qc.camera_motion_score
+      ]))
+      perceptual_qc = evaluate_perceptual_quality(auto_quality_estimate, ...)
+
+      # In scorecard.py:
+      weighted_1_to_5 = (
+          weights.player_integrity * football_qc.player_integrity_score +
+          weights.ball_integrity * football_qc.ball_integrity_score +
+          weights.temporal_stability * temporal_stability_1_to_5 +
+          weights.occlusion_handling * football_qc.occlusion_handling_score +
+          weights.camera_motion * football_qc.camera_motion_score +
+          weights.pitch_geometry * football_qc.pitch_geometry_score +
+          weights.broadcast_graphics * football_qc.broadcast_graphics_score +
+          weights.goal_net * football_qc.goal_net_score +
+          weights.human_mos * perceptual_qc.overall_quality_mos   # <--- 15% WEIGHT
+      )
+
+* Why this is a flaw:
+  In production batch runs or CI/CD pipelines, no human MOS survey file is provided.
+  `perceptual_qc.overall_quality_mos` therefore falls back to `auto_quality_estimate`,
+  which is simply the unweighted arithmetic mean of the Layer 3 football metrics.
+  
+  In `scorecard.py`, `weights.human_mos` is allocated a 15% weight.
+  This creates a **circular double-counting loop**:
+  The Layer 3 metrics are counted once directly (totaling 65% of the scorecard),
+  and then counted a second time through `human_mos` (an extra 15% of the scorecard).
+  
+  Any false-positive penalty in Layer 3 (such as pitch lines or graphics ROIs) is
+  amplified by 123%, distorting the final 0-10 Quality Score.
+
+* Remediation:
+  If `human_mos_file` is omitted, either:
+    1. Re-normalize weights among the remaining objective metrics without `human_mos`, or
+    2. Compute automated perceptual quality using a true no-reference perceptual model
+       (e.g., BRISQUE, NIQE, or a spatial-temporal CNN feature proxy) rather than
+       re-averaging the existing football scores.
+
+================================================================================
+6. SUMMARY & REMEDIATION ROADMAP
+================================================================================
+
+PRIORITY 1 (Critical Bugs - Cause Incorrect Measurements):
+  1. Fix `scene_cuts.py` temporal index alignment so `prev_out_odd` is compared.
+  2. Fix `optical_flow.py` warping direction: invert flow or use backward mapping.
+  3. Fix `ball.py` zero-detection paradox (penalize missing/dissolved balls).
+
+PRIORITY 2 (Heuristic Gating - Eliminate Pervasive False Positives):
+  1. Modulo-pi and vanishing-point clustering in `pitch_geometry.py`.
+  2. Presence verification before evaluating `goal_net.py` and `broadcast_graphics.py`.
+  3. Remove circular double-counting of `human_mos` in `scorecard.py`.
+
+PRIORITY 3 (Metric Robustness - Scale Invariance):
+  1. Normalize `smoothness.py` discontinuity penalty by sequence length.
+  2. Replace raw intensity differences in `flicker.py` with motion compensation.
+  3. Gate player occlusions using source-referenced differential texture comparison.
+================================================================================

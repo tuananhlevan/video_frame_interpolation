@@ -52,7 +52,7 @@ def detect_ball_candidates(
         players = detect_player_blobs(frame)
     for p in players:
         px, py, pw, ph = p["bbox"]
-        cv2.rectangle(clean_pitch, (px - 5, py - 5), (px + pw + 5, py + ph + 5), 0, thickness=cv2.FILLED)
+        cv2.rectangle(clean_pitch, (px - 10, py - 5), (px + pw + 10, py + ph + 15), 0, thickness=cv2.FILLED)
 
     # 3. Find white/high-contrast objects inside clean pitch
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -114,7 +114,7 @@ def evaluate_ball_integrity(
 
     for idx, frame in enumerate(frames_sequence):
         players = detect_player_blobs(frame)
-        candidates = detect_ball_candidates(frame, players=players, min_circularity=0.40)
+        candidates = detect_ball_candidates(frame, players=players, min_circularity=0.50)
 
         # 1. Candidate tracking with Outlier Gating (Flaw 3) & Shape Accounting (Flaw 6)
         best_candidate: Optional[Tuple[float, float, float, float]] = None
@@ -122,13 +122,13 @@ def evaluate_ball_integrity(
             if prev_pos is None:
                 # Pick most circular candidate to initiate track reliably
                 candidates.sort(key=lambda x: x[3], reverse=True)
-                if candidates[0][3] >= 0.50:
+                if candidates[0][3] >= 0.55:
                     best_candidate = candidates[0]
                     trajectories.append((best_candidate[0], best_candidate[1]))
                     prev_prev_pos = prev_pos
                     prev_pos = (best_candidate[0], best_candidate[1])
                     frames_since_last_seen = 0
-                    if candidates[0][3] < 0.55:
+                    if candidates[0][3] < 0.65:
                         deformed_frames_count += 1
             else:
                 allowed_displacement = base_velocity_limit * (frames_since_last_seen + 1)
@@ -149,7 +149,7 @@ def evaluate_ball_integrity(
                     prev_prev_pos = prev_pos
                     prev_pos = (best_candidate[0], best_candidate[1])
                     frames_since_last_seen = 0
-                    if closest[3] < 0.55:
+                    if closest[3] < 0.65:
                         deformed_frames_count += 1
         else:
             frames_since_last_seen += 1
