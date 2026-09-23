@@ -6,4 +6,5 @@ evaluation_log
 !.gitignore
 *.egg-info
 tests/
-__pycache__
+__pycache____pycache__/
+*.pyc
