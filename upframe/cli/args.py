@@ -29,7 +29,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-o", "--output", dest="output_flag", help="Output video file path")
 
     parser.add_argument("-m", "--model", default="rife",
-                        choices=["rife", "blend", "amt", "amt-s", "amt-l", "amt-g", "film", "ifrnet"],
+                        choices=["rife", "blend", "amt", "amt-s", "amt-l", "amt-g",
+                                 "film", "ifrnet", "gmfss", "ema-vfi", "ema-vfi-s"],
                         help="VFI model to use (default: rife)")
     parser.add_argument("--gpus", default=None, help="Comma-separated GPU indices (e.g. '0,1,2') or 'cpu'")
     parser.add_argument("--workers", "-w", type=int, default=None,

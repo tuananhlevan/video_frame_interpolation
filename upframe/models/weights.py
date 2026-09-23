@@ -79,7 +79,30 @@ MODEL_WEIGHT_CANDIDATES = {
         "film/pretrained_models/film_net/Style/saved_model",
         "pretrained_models/film_net/Style/saved_model",
         os.path.join(CACHE_DIR, "film", "saved_model"),
-    ]
+    ],
+    # GMFSS Fortuna — checkpoint is a *directory* containing 4 pkl files
+    "gmfss": [
+        "backbones/gmfss/train_log",
+        "gmfss/train_log",
+        "train_log",
+        os.path.join(CACHE_DIR, "gmfss", "train_log"),
+    ],
+    # EMA-VFI (large) — single pkl checkpoint
+    "ema-vfi": [
+        "backbones/ema_vfi/ckpt/ours.pkl",
+        "backbones/ema_vfi/ckpt/ema-vfi-l.pkl",
+        "ema_vfi/ckpt/ours.pkl",
+        "ckpt/ours.pkl",
+        os.path.join(CACHE_DIR, "ema_vfi", "ours.pkl"),
+    ],
+    # EMA-VFI (small)
+    "ema-vfi-s": [
+        "backbones/ema_vfi/ckpt/ours_small.pkl",
+        "backbones/ema_vfi/ckpt/ema-vfi-s.pkl",
+        "ema_vfi/ckpt/ours_small.pkl",
+        "ckpt/ours_small.pkl",
+        os.path.join(CACHE_DIR, "ema_vfi", "ours_small.pkl"),
+    ],
 }
 
 
