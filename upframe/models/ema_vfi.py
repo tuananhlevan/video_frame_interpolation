@@ -42,23 +42,12 @@ _CKPT_CANDIDATES = {
 _CACHE_CKPT_BASE = os.path.expanduser("~/.cache/upframe/ema_vfi/ckpt")
 
 
-def _find_ckpt(variant: str, explicit: Optional[str] = None) -> Optional[str]:
-    """Resolve checkpoint path for a given EMA-VFI variant."""
-    if explicit and os.path.isfile(explicit):
-        return os.path.abspath(explicit)
+from upframe.models.weights import resolve_checkpoint
 
-    candidates = _CKPT_CANDIDATES.get(variant, _CKPT_CANDIDATES["ema-vfi"])
-    search_dirs = [
-        os.path.join(_BACKBONE_DIR, "ckpt"),
-        _BACKBONE_DIR,
-        _CACHE_CKPT_BASE,
-    ]
-    for fname in candidates:
-        for d in search_dirs:
-            p = os.path.join(d, fname)
-            if os.path.isfile(p):
-                return os.path.abspath(p)
-    return None
+
+def _find_ckpt(variant: str, explicit: Optional[str] = None) -> Optional[str]:
+    """Resolve checkpoint path for a given EMA-VFI variant, auto-downloading if missing."""
+    return resolve_checkpoint(variant, explicit)
 
 
 def _make_model(variant: str) -> Any:
@@ -67,13 +56,15 @@ def _make_model(variant: str) -> Any:
     We import `config` and `Trainer` from the backbone directory so we can
     reconfigure MODEL_CONFIG before instantiation (large vs. small).
     """
-    # Ensure backbone is importable
-    if _BACKBONE_DIR not in sys.path:
-        sys.path.insert(0, _BACKBONE_DIR)
+    # Evict other backbones from sys.path and prioritize EMA-VFI
+    sys.path = [p for p in sys.path if not any(p.endswith(os.path.join("backbones", b)) for b in ("gmfss", "rife", "amt", "film", "ifrnet"))]
+    if _BACKBONE_DIR in sys.path:
+        sys.path.remove(_BACKBONE_DIR)
+    sys.path.insert(0, _BACKBONE_DIR)
 
-    # Force reimport so patched MODEL_CONFIG takes effect
+    # Force reimport so patched MODEL_CONFIG and model modules take effect
     for mod in list(sys.modules.keys()):
-        if mod in ("config", "Trainer") or mod.startswith("model."):
+        if mod in ("config", "Trainer", "model") or mod.startswith("model."):
             del sys.modules[mod]
 
     import config as ema_cfg  # type: ignore[import]
@@ -178,9 +169,6 @@ def _register_ema_vfi(variant: str):
             model_obj.net.to(self.device)
             model_obj.net.eval()
 
-            if fp16 and self.device.type == "cuda":
-                model_obj.net.half()
-
             self._ema_model = model_obj
             self.half_precision = fp16 and (self.device.type == "cuda")
             self.is_loaded = True
@@ -190,11 +178,9 @@ def _register_ema_vfi(variant: str):
 
         def _to_tensor(self, frame: Union[torch.Tensor, np.ndarray]) -> torch.Tensor:
             if isinstance(frame, np.ndarray):
-                t = frame_to_tensor(frame, self.device, half=self.half_precision)
+                t = frame_to_tensor(frame, self.device, half=False)
             else:
-                t = frame.to(self.device)
-                if self.half_precision:
-                    t = t.half()
+                t = frame.to(self.device).float()
             return t
 
         def interpolate(
@@ -225,7 +211,11 @@ def _register_ema_vfi(variant: str):
             tta = kwargs.get("tta", self._use_tta)
 
             with torch.no_grad():
-                pred = self._ema_model.inference(img0_p, img1_p, TTA=tta, timestep=timestep)
+                if self.half_precision:
+                    with torch.amp.autocast("cuda"):
+                        pred = self._ema_model.inference(img0_p, img1_p, TTA=tta, timestep=timestep)
+                else:
+                    pred = self._ema_model.inference(img0_p, img1_p, TTA=tta, timestep=timestep)
 
             pred = padder.unpad(pred)
             pred = torch.clamp(pred, 0.0, 1.0)

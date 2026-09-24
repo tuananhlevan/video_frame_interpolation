@@ -40,6 +40,9 @@ class VideoMetadata:
     bit_rate: Optional[int] = None
     file_size_bytes: int = 0
     audio_streams: List[AudioMetadata] = field(default_factory=list)
+    field_order: Optional[str] = None
+    is_interlaced: bool = False
+    interlace_details: Optional[Dict[str, Any]] = None
 
     @property
     def has_audio(self) -> bool:

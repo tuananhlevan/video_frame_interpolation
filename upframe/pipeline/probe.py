@@ -4,14 +4,66 @@ import json
 import logging
 import os
 import subprocess
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from upframe.core.types import AudioMetadata, VideoMetadata
 from upframe.utils.ffmpeg import find_binary, parse_fraction
 
 logger = logging.getLogger(__name__)
 
 
-def probe_video(filepath: str, ffprobe_bin: str = "ffprobe") -> VideoMetadata:
+def detect_interlacing(
+    filepath: str,
+    max_frames: int = 50,
+    ffmpeg_bin: str = "ffmpeg"
+) -> Tuple[bool, str, Dict[str, Any]]:
+    """Analyzes the video using FFmpeg's idet filter to detect field interleaving (1080i/576i).
+
+    Returns:
+        (is_interlaced, field_order, idet_details)
+    """
+    try:
+        resolved_bin = find_binary(ffmpeg_bin)
+        cmd = [
+            resolved_bin,
+            "-hide_banner",
+            "-i", filepath,
+            "-filter:v", "idet",
+            "-frames:v", str(max_frames),
+            "-an",
+            "-f", "null",
+            "-"
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        last_idet_line = None
+        for line in proc.stderr.splitlines():
+            if "Multi frame detection:" in line:
+                last_idet_line = line
+
+        if last_idet_line:
+            parts = last_idet_line.split("Multi frame detection:")[-1].split()
+            data: Dict[str, int] = {}
+            for i in range(0, len(parts), 2):
+                key = parts[i].rstrip(":")
+                try:
+                    data[key] = int(parts[i + 1])
+                except (ValueError, IndexError):
+                    pass
+            tff = data.get("TFF", 0)
+            bff = data.get("BFF", 0)
+            prog = data.get("Progressive", 0)
+
+            interlaced_frames = tff + bff
+            is_interlaced = (interlaced_frames > prog and interlaced_frames >= 10)
+            detected_field = "tff" if tff >= bff else "bff"
+            order = detected_field if is_interlaced else "progressive"
+            return is_interlaced, order, data
+    except Exception as e:
+        logger.debug(f"Interlace detection failed on {filepath}: {e}")
+
+    return False, "progressive", {}
+
+
+def probe_video(filepath: str, ffprobe_bin: str = "ffprobe", check_interlace: bool = True) -> VideoMetadata:
     """Probes video and audio streams using ffprobe."""
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Input video not found: {filepath}")
@@ -91,6 +143,18 @@ def probe_video(filepath: str, ffprobe_bin: str = "ffprobe") -> VideoMetadata:
     color_transfer = video_stream.get("color_transfer")
     color_range = video_stream.get("color_range")
 
+    raw_field_order = video_stream.get("field_order")
+    is_interlaced = False
+    field_order = "progressive"
+    interlace_details: Dict[str, Any] = {}
+
+    if raw_field_order in ("tt", "bb", "tb", "bt"):
+        is_interlaced = True
+        field_order = "tff" if raw_field_order in ("tt", "tb") else "bff"
+        interlace_details = {"container_field_order": raw_field_order}
+    elif check_interlace:
+        is_interlaced, field_order, interlace_details = detect_interlacing(filepath)
+
     r_frame_rate = video_stream.get("r_frame_rate", "25/1")
     avg_frame_rate = video_stream.get("avg_frame_rate", "25/1")
     nominal_fps = parse_fraction(r_frame_rate, 25.0)
@@ -157,5 +221,8 @@ def probe_video(filepath: str, ffprobe_bin: str = "ffprobe") -> VideoMetadata:
         time_base=time_base,
         bit_rate=bit_rate,
         file_size_bytes=file_size_bytes,
-        audio_streams=audio_streams
+        audio_streams=audio_streams,
+        field_order=field_order,
+        is_interlaced=is_interlaced,
+        interlace_details=interlace_details
     )

@@ -33,6 +33,7 @@ class AMTModel(BaseVFIModel):
         checkpoint_path: Optional[str] = None,
         config_path: Optional[str] = None,
         niters: int = 6,
+        fp16: bool = False,
         **kwargs: Any
     ) -> None:
         if device.startswith("cuda") and not torch.cuda.is_available():
@@ -41,9 +42,14 @@ class AMTModel(BaseVFIModel):
             self.device = torch.device(device)
 
         self.niters = niters
+        self.half_precision = fp16 and (self.device.type == "cuda")
+
         amt_dir = os.path.abspath("backbones/amt") if os.path.exists("backbones/amt") else os.path.abspath("amt")
-        if amt_dir not in sys.path:
-            sys.path.insert(0, amt_dir)
+        # Evict other backbones from sys.path and prioritize AMT
+        sys.path = [p for p in sys.path if not any(p.endswith(os.path.join("backbones", b)) for b in ("gmfss", "ema_vfi", "rife", "film", "ifrnet"))]
+        if amt_dir in sys.path:
+            sys.path.remove(amt_dir)
+        sys.path.insert(0, amt_dir)
 
         # 1. Resolve checkpoint path first (using self.name, e.g. amt-g, amt-s, amt-l)
         resolved_path = resolve_checkpoint(self.name, checkpoint_path)
@@ -134,7 +140,11 @@ class AMTModel(BaseVFIModel):
 
         with torch.no_grad():
             embt = torch.tensor(0.5, device=self.device).view(1, 1, 1, 1).float()
-            outputs = self.model(ta, tb, embt=embt, iters=self.niters, eval=True)
+            if self.half_precision:
+                with torch.amp.autocast("cuda"):
+                    outputs = self.model(ta, tb, embt=embt, iters=self.niters, eval=True)
+            else:
+                outputs = self.model(ta, tb, embt=embt, iters=self.niters, eval=True)
             if isinstance(outputs, dict):
                 pred = outputs.get("imgt_pred", outputs)
             elif isinstance(outputs, (list, tuple)):
@@ -146,6 +156,13 @@ class AMTModel(BaseVFIModel):
         if is_numpy:
             return tensor_to_frame(pred)
         return pred
+
+    def unload(self) -> None:
+        if self.model is not None:
+            del self.model
+            self.model = None
+        super().unload()
+
 
 
 @ModelRegistry.register("amt-s")

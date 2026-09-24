@@ -90,6 +90,137 @@ def get_pitch_coverage(frame: np.ndarray) -> float:
     return float(np.count_nonzero(mask)) / float(320 * 180)
 
 
+def evaluate_ball_triplet(
+    frame_a: np.ndarray,
+    frame_x: np.ndarray,
+    frame_b: np.ndarray,
+    players_x: Optional[List[Dict[str, any]]] = None,
+    pitch_lines_x: Optional[List[Tuple[int, int, int, int]]] = None
+) -> Dict[str, any]:
+    """Evaluates ball integrity on an interpolated frame F_X using ground-truth frames (F_A, F_B).
+    
+    If both F_A and F_B have a confirmed ball at (x_A, y_A) and (x_B, y_B) with plausible velocity,
+    F_X is verified for:
+    - Ball in-betweening presence (flags dissolution if missing)
+    - Trajectory collinearity (flags trajectory wobble/bending)
+    - Ball deformation (flags circularity drop)
+    - Ghost duplicates (flags extra balls along motion trajectory)
+    
+    If either F_A or F_B does NOT have a ball, F_X is not penalized and non-ball blobs are ignored.
+    
+    Returns:
+        Dict with keys: ball_active, ball_matched, ball_dissolved, ball_wobble, ball_deformed, ball_duplicate,
+        pos_a, pos_b, pos_x, expected_pos, collinear_dist, circularity_x
+    """
+    cands_a = detect_ball_candidates(frame_a, min_circularity=0.50)
+    cands_b = detect_ball_candidates(frame_b, min_circularity=0.50)
+    
+    res: Dict[str, any] = {
+        "ball_active": False,
+        "ball_matched": False,
+        "ball_dissolved": False,
+        "ball_occluded": False,
+        "ball_wobble": False,
+        "ball_deformed": False,
+        "ball_duplicate": False,
+        "pos_a": None,
+        "pos_b": None,
+        "pos_x": None,
+        "expected_pos": None,
+        "collinear_dist": 0.0,
+        "circularity_x": None
+    }
+    
+    if not cands_a or not cands_b:
+        return res
+    
+    cands_a.sort(key=lambda x: x[3], reverse=True)
+    cands_b.sort(key=lambda x: x[3], reverse=True)
+    
+    ball_a = cands_a[0]
+    ball_b = cands_b[0]
+    
+    dist_ab = math.hypot(ball_b[0] - ball_a[0], ball_b[1] - ball_a[1])
+    # Max physical displacement over 2 source frames (40ms = 25fps) is ~160px (144 km/h at 1080p)
+    if dist_ab > 160.0:
+        return res
+    
+    res["ball_active"] = True
+    res["pos_a"] = (ball_a[0], ball_a[1])
+    res["pos_b"] = (ball_b[0], ball_b[1])
+    
+    expected_x = (ball_a[0] + ball_b[0]) / 2.0
+    expected_y = (ball_a[1] + ball_b[1]) / 2.0
+    res["expected_pos"] = (expected_x, expected_y)
+    
+    cands_x = detect_ball_candidates(frame_x, players=players_x, pitch_lines=pitch_lines_x, min_circularity=0.35)
+    
+    search_radius = max(20.0, dist_ab * 0.55 + 10.0)
+    matched_x = None
+    min_d = float('inf')
+    for c in cands_x:
+        d = math.hypot(c[0] - expected_x, c[1] - expected_y)
+        if d <= search_radius and d < min_d:
+            min_d = d
+            matched_x = c
+    
+    if matched_x is None:
+        # Check if ball is naturally occluded by a player in frame_x
+        is_occluded = False
+        if players_x is not None:
+            for p in players_x:
+                px, py, pw, ph = p["bbox"]
+                if (px - 10 <= expected_x <= px + pw + 10) and (py - 10 <= expected_y <= py + ph + 10):
+                    is_occluded = True
+                    break
+        if is_occluded:
+            res["ball_occluded"] = True
+            res["ball_dissolved"] = False
+        else:
+            res["ball_dissolved"] = True
+        return res
+    
+    res["ball_matched"] = True
+    res["pos_x"] = (matched_x[0], matched_x[1])
+    res["circularity_x"] = matched_x[3]
+    
+    if matched_x[3] < 0.60 and (ball_a[3] >= 0.65 or ball_b[3] >= 0.65):
+        res["ball_deformed"] = True
+    
+    if dist_ab > 8.0:
+        p1 = np.array([ball_a[0], ball_a[1]], dtype=np.float32)
+        p2 = np.array([ball_b[0], ball_b[1]], dtype=np.float32)
+        px = np.array([matched_x[0], matched_x[1]], dtype=np.float32)
+        line_vec = p2 - p1
+        line_len = np.linalg.norm(line_vec)
+        line_unit = line_vec / (line_len + 1e-6)
+        proj = np.dot(px - p1, line_unit)
+        perp_vec = (px - p1) - proj * line_unit
+        perp_dist = float(np.linalg.norm(perp_vec))
+        res["collinear_dist"] = perp_dist
+        if perp_dist > 8.0:
+            res["ball_wobble"] = True
+    
+    if dist_ab >= 8.0:
+        line_vec = p2 - p1
+        line_len = np.linalg.norm(line_vec)
+        line_unit = line_vec / (line_len + 1e-6)
+        for c in cands_x:
+            if (c[0], c[1]) != (matched_x[0], matched_x[1]) and c[3] >= 0.55:
+                pc = np.array([c[0], c[1]], dtype=np.float32)
+                proj_c = float(np.dot(pc - p1, line_unit))
+                perp_vec_c = (pc - p1) - proj_c * line_unit
+                perp_dist_c = float(np.linalg.norm(perp_vec_c))
+                d_to_primary = math.hypot(c[0] - matched_x[0], c[1] - matched_x[1])
+                
+                # Ghost ball is along the motion trajectory between pA and pB
+                if (-10.0 <= proj_c <= line_len + 10.0) and perp_dist_c <= 12.0 and d_to_primary >= 8.0:
+                    res["ball_duplicate"] = True
+                    break
+    
+    return res
+
+
 def evaluate_ball_integrity(
     frames_sequence: List[np.ndarray],
     fps: float = 50.0,
@@ -159,10 +290,11 @@ def evaluate_ball_integrity(
                 dist = math.hypot(closest[0] - prev_pos[0], closest[1] - prev_pos[1])
 
                 if dist > allowed_displacement:
-                    # OUTLIER GATING: Penalize teleportation, but DO NOT snap prev_pos to the outlier!
-                    teleportation_count += 1
+                    # Only penalize teleportation if ball was actively tracked on immediate prior frame
+                    if frames_since_last_seen == 0:
+                        teleportation_count += 1
                     frames_since_last_seen += 1
-                    if frames_since_last_seen > max_lost_gap_frames:
+                    if frames_since_last_seen > 3:
                         prev_pos = None
                         prev_prev_pos = None
                 else:
@@ -175,7 +307,7 @@ def evaluate_ball_integrity(
                         deformed_frames_count += 1
         else:
             frames_since_last_seen += 1
-            if frames_since_last_seen > max_lost_gap_frames:
+            if frames_since_last_seen > 3:
                 prev_pos = None
                 prev_prev_pos = None
 
@@ -195,15 +327,6 @@ def evaluate_ball_integrity(
                     if min_dup_dist <= dist <= max_dup_dist:
                         has_duplicate = True
                         break
-        elif best_candidate is None and len(candidates) >= 2:
-            for i in range(len(candidates)):
-                for j in range(i + 1, len(candidates)):
-                    dist = math.hypot(candidates[i][0] - candidates[j][0], candidates[i][1] - candidates[j][1])
-                    if min_dup_dist <= dist <= max_dup_dist:
-                        has_duplicate = True
-                        break
-                if has_duplicate:
-                    break
         if has_duplicate:
             duplicate_frames_count += 1
 

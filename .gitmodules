@@ -1,6 +1,3 @@
-[submodule "backbones/ema-vfi"]
-	path = backbones/ema-vfi
-	url = https://github.com/MCG-NJU/EMA-VFI.git
 [submodule "backbones/ema_vfi"]
 	path = backbones/ema_vfi
 	url = https://github.com/MCG-NJU/EMA-VFI.git

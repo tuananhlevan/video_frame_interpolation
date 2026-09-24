@@ -1,10 +1,35 @@
+# Video artifacts and media
 *.mp4
-.*
+*.mov
+*.avi
+*.mkv
+*.webm
+
+# Logs and outputs
+upframe_log/
+evaluation_log/
 strats/
-upframe_log
-evaluation_log
+
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+
+# Model weights
+*.pth
+*.pkl
+*.pt
+*.bin
+*.safetensors
+backbones/interpany_checkpoints/
+backbones/ifrnet/checkpoints/
+backbones/amt/ckpt/
+backbones/ema_vfi/ckpt/
+backbones/rife/train_log/
+backbones/interpany/
+
+# Keep configuration dotfiles
 !.gitignore
-*.egg-info
-tests/
-__pycache____pycache__/
-*.pyc
+!.gitmodules

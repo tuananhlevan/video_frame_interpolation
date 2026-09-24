@@ -21,13 +21,14 @@ def validate_timestamps(
     """
     ffprobe_bin = find_binary("ffprobe")
     
-    # Check frame PTS in presentation/display order
+    # Check packet PTS directly (fast demux without decoding video frames)
+    interval_sec = max(5.0, min(20.0, max_frames_to_check / 25.0))
     cmd = [
         ffprobe_bin,
         "-v", "error",
         "-select_streams", "v:0",
-        "-show_entries", "frame=pts_time",
-        "-read_intervals", f"%+{max_frames_to_check}",
+        "-show_entries", "packet=pts_time,dts_time",
+        "-read_intervals", f"%+{interval_sec:.1f}",
         "-of", "json",
         filepath
     ]
@@ -38,44 +39,19 @@ def validate_timestamps(
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
         data = json.loads(proc.stdout)
-        frames = data.get("frames", [])
-        for f in frames:
-            pts_time = f.get("pts_time")
-            if pts_time is not None:
+        packets = data.get("packets", [])
+        for p in packets:
+            pt = p.get("pts_time")
+            if pt is not None:
                 try:
-                    pts_list.append(float(pts_time))
+                    pts_list.append(float(pt))
                 except ValueError:
                     pass
+        # Packets in video containers with B-frames are in decode (DTS) order.
+        # Sort PTS to evaluate presentation timeline
+        pts_list.sort()
     except Exception as e:
-        logger.warning(f"Frame PTS check failed ({e}), falling back to packet check")
-
-    # Fallback to packet PTS if frame PTS returned empty
-    if not pts_list:
-        cmd_pkt = [
-            ffprobe_bin,
-            "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "packet=pts_time,dts_time",
-            "-read_intervals", f"%+{max_frames_to_check}",
-            "-of", "json",
-            filepath
-        ]
-        try:
-            proc = subprocess.run(cmd_pkt, capture_output=True, text=True, check=True)
-            data = json.loads(proc.stdout)
-            packets = data.get("packets", [])
-            for p in packets:
-                pt = p.get("pts_time")
-                if pt is not None:
-                    try:
-                        pts_list.append(float(pt))
-                    except ValueError:
-                        pass
-            # Packets in video containers with B-frames are in decode (DTS) order.
-            # Sort PTS to evaluate presentation timeline
-            pts_list.sort()
-        except Exception:
-            pass
+        logger.warning(f"Packet PTS check failed ({e})")
 
     if not pts_list:
         return True, {"frames_checked": 0, "note": "PTS inspection skipped"}, []

@@ -21,11 +21,13 @@ class PipelineConfig:
     weights: Optional[str] = None
     resume: bool = False
     fp16: bool = True
+    tta: bool = False
     max_retries: int = 3
     target_fps: float = 50.0
     workers: Optional[int] = None
     log_dir: str = "upframe_log"
     log_file: Optional[str] = None
+    deinterlace: str = "auto"
 
     @classmethod
     def from_yaml(cls, path: str) -> "PipelineConfig":

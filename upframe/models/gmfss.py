@@ -40,14 +40,11 @@ _DEFAULT_WEIGHT_DIR = os.path.join(_BACKBONE_DIR, "train_log")
 _CACHE_WEIGHT_DIR = os.path.expanduser("~/.cache/upframe/gmfss/train_log")
 
 
+from upframe.models.weights import resolve_checkpoint
+
 def _find_weight_dir(explicit: Optional[str] = None) -> Optional[str]:
-    """Return the first weight directory that contains all 4 GMFSS pkl files."""
-    required = {"flownet.pkl", "metric.pkl", "feat.pkl", "fusionnet.pkl"}
-    candidates = [c for c in [explicit, _DEFAULT_WEIGHT_DIR, _CACHE_WEIGHT_DIR] if c]
-    for d in candidates:
-        if os.path.isdir(d) and required.issubset(set(os.listdir(d))):
-            return d
-    return None
+    """Return weight directory that contains all 4 GMFSS pkl files, auto-downloading if missing."""
+    return resolve_checkpoint("gmfss", explicit)
 
 
 @ModelRegistry.register("gmfss")
@@ -95,9 +92,24 @@ class GMFSSModel(BaseVFIModel):
 
         self._scale = scale
 
-        # Inject backbone directory into sys.path so GMFSS imports resolve
-        if _BACKBONE_DIR not in sys.path:
-            sys.path.insert(0, _BACKBONE_DIR)
+        # Ensure clean namespace for GMFSS 'model' package
+        for mod in list(sys.modules.keys()):
+            if mod == "model" or mod.startswith("model."):
+                del sys.modules[mod]
+
+        # Evict other backbones from sys.path and prioritize GMFSS
+        sys.path = [p for p in sys.path if not any(p.endswith(os.path.join("backbones", b)) for b in ("ema_vfi", "rife", "amt", "film", "ifrnet"))]
+        if _BACKBONE_DIR in sys.path:
+            sys.path.remove(_BACKBONE_DIR)
+        sys.path.insert(0, _BACKBONE_DIR)
+
+        # Ensure model/__init__.py exists so GMFSS model directory is recognized as a package
+        init_file = os.path.join(_BACKBONE_DIR, "model", "__init__.py")
+        if not os.path.exists(init_file):
+            try:
+                open(init_file, "a").close()
+            except OSError:
+                pass
 
         weight_dir = _find_weight_dir(checkpoint_path)
         if weight_dir is None:
@@ -129,8 +141,6 @@ class GMFSSModel(BaseVFIModel):
         # Move each sub-network to target device explicitly
         for sub in (gmfss.flownet, gmfss.metricnet, gmfss.feat_ext, gmfss.fusionnet):
             sub.to(self.device)
-            if fp16 and self.device.type == "cuda":
-                sub.half()
 
         self._model = gmfss
         self.half_precision = fp16 and (self.device.type == "cuda")
@@ -143,11 +153,9 @@ class GMFSSModel(BaseVFIModel):
 
     def _to_tensor(self, frame: Union[torch.Tensor, np.ndarray]) -> torch.Tensor:
         if isinstance(frame, np.ndarray):
-            t = frame_to_tensor(frame, self.device, half=self.half_precision)
+            t = frame_to_tensor(frame, self.device, half=False)
         else:
-            t = frame.to(self.device)
-            if self.half_precision:
-                t = t.half()
+            t = frame.to(self.device).float()
         return t
 
     # ------------------------------------------------------------------
@@ -188,8 +196,13 @@ class GMFSSModel(BaseVFIModel):
         scale = kwargs.get("scale", self._scale)
 
         with torch.no_grad():
-            reuse = self._model.reuse(img0_p, img1_p, scale)
-            pred = self._model.inference(img0_p, img1_p, reuse, timestep)
+            if self.half_precision:
+                with torch.amp.autocast("cuda"):
+                    reuse = self._model.reuse(img0_p, img1_p, scale)
+                    pred = self._model.inference(img0_p, img1_p, reuse, timestep)
+            else:
+                reuse = self._model.reuse(img0_p, img1_p, scale)
+                pred = self._model.inference(img0_p, img1_p, reuse, timestep)
 
         pred = unpad(pred, orig_h, orig_w)
 

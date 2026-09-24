@@ -7,3 +7,6 @@ opencv-python-headless
 pytest
 omegaconf
 imageio
+timm
+requests
+gdown

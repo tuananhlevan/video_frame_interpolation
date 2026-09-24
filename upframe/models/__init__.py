@@ -9,6 +9,8 @@ from upframe.models.ifrnet import IFRNetModel
 from upframe.models.film import FILMModel
 from upframe.models.gmfss import GMFSSModel
 from upframe.models.ema_vfi import _EMAVFILarge as EMAVFIModel, _EMAVFISmall as EMAVFISmallModel
+from upframe.models.interpany import InterpAnyModel
+from upframe.models.bwdif import BWDIFModel
 
 __all__ = [
     "BaseVFIModel",
@@ -22,4 +24,6 @@ __all__ = [
     "GMFSSModel",
     "EMAVFIModel",
     "EMAVFISmallModel",
+    "InterpAnyModel",
+    "BWDIFModel",
 ]

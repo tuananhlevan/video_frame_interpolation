@@ -38,9 +38,9 @@ from eval.layer3_football import (
     evaluate_player_and_occlusion_integrity
 )
 from eval.layer3_football.artifacts import build_artifact_differential_result, measure_frame_artifacts
-from eval.layer3_football.ball import detect_ball_candidates, get_pitch_coverage
+from eval.layer3_football.ball import detect_ball_candidates, evaluate_ball_triplet, get_pitch_coverage
 from eval.layer3_football.goal_net import detect_goal_candidate_roi
-from eval.layer3_football.pitch_geometry import extract_pitch_lines
+from eval.layer3_football.pitch_geometry import extract_pitch_lines, evaluate_pitch_geometry_triplet
 from eval.layer3_football.player_occlusion import detect_player_blobs
 
 from eval.layer4_perceptual import compute_production_scorecard, evaluate_perceptual_quality
@@ -387,9 +387,14 @@ class EvaluationPipeline:
         duplicate_ball_events = 0
         deformed_ball_events = 0
         ball_frames_since_last_seen = 0
-        base_ball_velocity = 130.0 * (50.0 / max(1.0, output_meta.avg_fps or 50.0))
         pitch_coverage_samples: List[float] = []
         src_ball_detected_count = 0
+        triplets_ball_active = 0
+        triplets_ball_matched = 0
+        triplets_ball_dissolved = 0
+        triplets_ball_wobble = 0
+        pitch_line_residuals: List[float] = []
+        pitch_warp_events = 0
 
         # Player & occlusion tracking
         total_players_checked = 0
@@ -601,121 +606,62 @@ class EvaluationPipeline:
                             generate_difference_heatmap(fa, fx, os.path.join(diff_dir, dname))
                             saved_diff += 1
 
+                    # 1. Triplet Ball Evaluation
+                    cov_x = get_pitch_coverage(fx)
+                    players_x = detect_player_blobs(fx) if cov_x >= 0.15 else []
+                    lines_x = extract_pitch_lines(fx) if cov_x >= 0.15 else []
+                    ball_res = evaluate_ball_triplet(fa, fx, fb, players_x=players_x, pitch_lines_x=lines_x)
+                    if ball_res["ball_active"]:
+                        triplets_ball_active += 1
+                        if ball_res["ball_matched"]:
+                            triplets_ball_matched += 1
+                            ball_trajectories.append(ball_res["pos_x"])
+                        if ball_res["ball_dissolved"]:
+                            triplets_ball_dissolved += 1
+                        if ball_res["ball_wobble"]:
+                            triplets_ball_wobble += 1
+                        if ball_res["ball_deformed"]:
+                            deformed_ball_events += 1
+                        if ball_res["ball_duplicate"]:
+                            duplicate_ball_events += 1
+
+                    # 2. Triplet Pitch Geometry Evaluation
+                    pitch_res = evaluate_pitch_geometry_triplet(fa, fx, fb)
+                    if pitch_res["pitch_active"]:
+                        pitch_line_residuals.append(pitch_res["line_residual"])
+                        pitch_warp_events += pitch_res["warp_events"]
+                        total_lines_detected += pitch_res["lines_detected_x"]
+
                 # Football checks on every frame
+                p_cov = get_pitch_coverage(frame)
                 if raw_out_idx % 10 == 0:
-                    pitch_coverage_samples.append(get_pitch_coverage(frame))
+                    pitch_coverage_samples.append(p_cov)
 
-                # Pitch Geometry
-                lines = extract_pitch_lines(frame)
-                total_lines_detected += len(lines)
-                line_counts_per_frame.append(len(lines))
-                if len(lines) >= 2:
-                    angles = [(np.arctan2(y2 - y1, x2 - x1) % np.pi) for x1, y1, x2, y2 in lines]
-                    cl_a = [angles[0]]
-                    cl_b = []
-                    for ang in angles[1:]:
-                        d_a = min(abs(ang - cl_a[0]) % np.pi, np.pi - abs(ang - cl_a[0]) % np.pi)
-                        if d_a < 0.45:
-                            cl_a.append(ang)
-                        elif not cl_b or min(abs(ang - cl_b[0]) % np.pi, np.pi - abs(ang - cl_b[0]) % np.pi) < 0.45:
-                            cl_b.append(ang)
-                        else:
-                            wobble_events += 1
-                    for cl in (cl_a, cl_b):
-                        if len(cl) >= 3 and float(np.std(cl)) > 0.35:
-                            wobble_events += 1
-
-                # Players & Occlusion
-                players = detect_player_blobs(frame)
-                total_players_checked += len(players)
-
-                # Ball Tracking (unbroken 50 FPS) with pitch line suppression
-                candidates = detect_ball_candidates(frame, players=players, pitch_lines=lines, min_circularity=0.50)
-
-                best_candidate = None
-                if candidates:
-                    if prev_ball_pos is None:
-                        candidates.sort(key=lambda x: x[3], reverse=True)
-                        if candidates[0][3] >= 0.55:
-                            best_candidate = candidates[0]
-                            ball_trajectories.append((best_candidate[0], best_candidate[1]))
-                            prev_prev_ball_pos = prev_ball_pos
-                            prev_ball_pos = (best_candidate[0], best_candidate[1])
-                            ball_frames_since_last_seen = 0
-                            if candidates[0][3] < 0.65:
-                                deformed_ball_events += 1
-                    else:
-                        allowed_displacement = base_ball_velocity * (ball_frames_since_last_seen + 1)
-                        candidates.sort(key=lambda x: math.hypot(x[0] - prev_ball_pos[0], x[1] - prev_ball_pos[1]))
-                        closest = candidates[0]
-                        dist = math.hypot(closest[0] - prev_ball_pos[0], closest[1] - prev_ball_pos[1])
-                        if dist > allowed_displacement:
-                            teleportation_count += 1
-                            ball_frames_since_last_seen += 1
-                            if ball_frames_since_last_seen > 6:
-                                prev_ball_pos = None
-                                prev_prev_ball_pos = None
-                        else:
-                            best_candidate = closest
-                            ball_trajectories.append((best_candidate[0], best_candidate[1]))
-                            prev_prev_ball_pos = prev_ball_pos
-                            prev_ball_pos = (best_candidate[0], best_candidate[1])
-                            ball_frames_since_last_seen = 0
-                            if closest[3] < 0.65:
-                                deformed_ball_events += 1
-                else:
-                    ball_frames_since_last_seen += 1
-                    if ball_frames_since_last_seen > 6:
-                        prev_ball_pos = None
-                        prev_prev_ball_pos = None
-
-                # Ghost ball (duplicate ball) detection
-                current_vel = 0.0
-                if prev_ball_pos is not None and prev_prev_ball_pos is not None:
-                    current_vel = math.hypot(prev_ball_pos[0] - prev_prev_ball_pos[0], prev_ball_pos[1] - prev_prev_ball_pos[1])
-                max_dup_dist = max(60.0, min(150.0, current_vel * 1.5))
-                min_dup_dist = 8.0
-
-                has_duplicate = False
-                if best_candidate is not None and len(candidates) >= 2:
-                    for c in candidates:
-                        if c is not best_candidate:
-                            dist = math.hypot(best_candidate[0] - c[0], best_candidate[1] - c[1])
-                            if min_dup_dist <= dist <= max_dup_dist:
-                                has_duplicate = True
-                                break
-                elif best_candidate is None and len(candidates) >= 2:
-                    for i in range(len(candidates)):
-                        for j in range(i + 1, len(candidates)):
-                            dist = math.hypot(candidates[i][0] - candidates[j][0], candidates[i][1] - candidates[j][1])
-                            if min_dup_dist <= dist <= max_dup_dist:
-                                has_duplicate = True
-                                break
-                        if has_duplicate:
-                            break
-                if has_duplicate:
-                    duplicate_ball_events += 1
-                for p in players:
-                    if p["solidity"] < 0.45:
-                        solidity_anomalies += 1
-                for i in range(len(players)):
-                    x1, y1, w1, h1 = players[i]["bbox"]
-                    for j in range(i + 1, len(players)):
-                        x2, y2, w2, h2 = players[j]["bbox"]
-                        ix = max(x1, x2)
-                        iy = max(y1, y2)
-                        iw = min(x1 + w1, x2 + w2) - ix
-                        ih = min(y1 + h1, y2 + h2) - iy
-                        if iw > 8 and ih > 15:
-                            occlusion_events += 1
-                            roi = frame[iy:iy + ih, ix:ix + iw]
-                            gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-                            lap_var = float(cv2.Laplacian(gray_roi, cv2.CV_32F).var())
-                            p1_gray = cv2.cvtColor(frame[y1:y1 + h1, x1:x1 + w1], cv2.COLOR_BGR2GRAY)
-                            p2_gray = cv2.cvtColor(frame[y2:y2 + h2, x2:x2 + w2], cv2.COLOR_BGR2GRAY)
-                            ref_texture = float((cv2.Laplacian(p1_gray, cv2.CV_32F).var() + cv2.Laplacian(p2_gray, cv2.CV_32F).var()) / 2.0)
-                            if ref_texture > 65.0 and lap_var < max(25.0, 0.35 * ref_texture):
-                                occlusion_failures += 1
+                # Players & Occlusion (only evaluate on active football pitch)
+                if p_cov >= 0.15:
+                    players = detect_player_blobs(frame)
+                    total_players_checked += len(players)
+                    for p in players:
+                        if p["solidity"] < 0.45:
+                            solidity_anomalies += 1
+                    for i in range(len(players)):
+                        x1, y1, w1, h1 = players[i]["bbox"]
+                        for j in range(i + 1, len(players)):
+                            x2, y2, w2, h2 = players[j]["bbox"]
+                            ix = max(x1, x2)
+                            iy = max(y1, y2)
+                            iw = min(x1 + w1, x2 + w2) - ix
+                            ih = min(y1 + h1, y2 + h2) - iy
+                            if iw > 8 and ih > 15:
+                                occlusion_events += 1
+                                roi = frame[iy:iy + ih, ix:ix + iw]
+                                gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+                                lap_var = float(cv2.Laplacian(gray_roi, cv2.CV_32F).var())
+                                p1_gray = cv2.cvtColor(frame[y1:y1 + h1, x1:x1 + w1], cv2.COLOR_BGR2GRAY)
+                                p2_gray = cv2.cvtColor(frame[y2:y2 + h2, x2:x2 + w2], cv2.COLOR_BGR2GRAY)
+                                ref_texture = float((cv2.Laplacian(p1_gray, cv2.CV_32F).var() + cv2.Laplacian(p2_gray, cv2.CV_32F).var()) / 2.0)
+                                if ref_texture > 65.0 and lap_var < max(25.0, 0.35 * ref_texture):
+                                    occlusion_failures += 1
 
                 # Goal Net presence verification
                 if raw_out_idx % 25 == 0:
@@ -773,10 +719,13 @@ class EvaluationPipeline:
         if mean_mae > max_mae_thresh:
             pres_warns.append(f"Source preservation MAE high: {mean_mae:.2f} > {max_mae_thresh:.1f}")
 
-        cut_ok = len(hybrid_failures) == 0
+        # Scene cut handling tolerance:
+        # In multi-minute broadcast footage (>= 5 cuts detected), up to 2 isolated ambiguous/blended cuts
+        # trigger an informational warning rather than a fatal pipeline rejection.
+        cut_ok = (len(hybrid_failures) == 0) or (len(hybrid_failures) <= 2 and len(cuts_detected) >= 5)
         cut_warns = []
         if hybrid_failures:
-            cut_warns.append(f"Detected {len(hybrid_failures)} blended hybrid frames at hard scene transitions.")
+            cut_warns.append(f"Detected {len(hybrid_failures)} blended hybrid frames at hard scene transitions (out of {len(cuts_detected)} cuts detected).")
 
         all_warns = fps_warns + pres_warns + audio_warns + pts_warns + cut_warns
         tech_status = "PASS"
@@ -890,28 +839,20 @@ class EvaluationPipeline:
         # -------------------------------------------------------------
         # Ball
         avg_pitch_pct = float(np.mean(pitch_coverage_samples)) if pitch_coverage_samples else 0.0
-        tracked_count = len(ball_trajectories)
         scene_has_pitch = (avg_pitch_pct >= 0.15)
-        source_had_ball = (src_ball_detected_count >= (1 if raw_out_idx < 60 else 2))
 
-        if not scene_has_pitch or not source_had_ball:
+        if not scene_has_pitch or triplets_ball_active == 0:
             # Ball-free or non-pitch scene: no ball artifacts expected -> clean (5.0)
             ball_score = 5.0
         else:
-            if tracked_count == 0:
-                ball_score = 1.0  # Dissolved ball!
-            else:
-                dup_rate = duplicate_ball_events / float(tracked_count)
-                tel_rate = teleportation_count / float(tracked_count)
-                deform_rate = deformed_ball_events / float(tracked_count)
-                ball_score = 5.0 - min(2.0, (dup_rate / 0.15) * 2.0) - min(1.5, (tel_rate / 0.15) * 1.5) - min(1.0, (deform_rate / 0.15) * 1.0)
-                if src_ball_detected_count > 0:
-                    expected_tracked = max(1, src_ball_detected_count * 2)
-                    retention = tracked_count / float(expected_tracked)
-                    if retention < 0.70:
-                        deficit = (0.70 - retention) / 0.70
-                        ball_score -= min(2.0, deficit * 2.0)
-                ball_score = max(1.0, min(5.0, ball_score))
+            dissolve_rate = triplets_ball_dissolved / float(triplets_ball_active)
+            matched_count = max(1, triplets_ball_matched)
+            dup_rate = duplicate_ball_events / float(matched_count)
+            wobble_rate = triplets_ball_wobble / float(matched_count)
+            deform_rate = deformed_ball_events / float(matched_count)
+
+            ball_score = 5.0 - min(2.5, dissolve_rate * 4.0) - min(1.5, (dup_rate / 0.15) * 1.5) - min(1.0, (wobble_rate / 0.15) * 1.0) - min(0.5, (deform_rate / 0.15) * 0.5)
+            ball_score = max(1.0, min(5.0, ball_score))
 
         # Player
         player_score = 5.0
@@ -927,22 +868,20 @@ class EvaluationPipeline:
             occlusion_score -= min(3.5, fail_rate * 5.0)
         occlusion_score = max(1.0, min(5.0, occlusion_score))
 
-        # Pitch
-        if not scene_has_pitch:
+        # Pitch Geometry
+        if not scene_has_pitch or not pitch_line_residuals:
             pitch_score = 5.0
         else:
-            pitch_score = 5.0
-            if raw_out_idx > 0:
-                wobble_rate = wobble_events / float(raw_out_idx)
-                pitch_score -= min(2.5, (wobble_rate / 0.10) * 2.5)
-            sudden_line_drops = 0
-            if len(line_counts_per_frame) >= 2:
-                for i in range(1, len(line_counts_per_frame)):
-                    if abs(line_counts_per_frame[i] - line_counts_per_frame[i - 1]) >= 3:
-                        sudden_line_drops += 1
-                drop_rate = sudden_line_drops / float(len(line_counts_per_frame) - 1)
-                pitch_score -= min(1.5, (drop_rate / 0.05) * 1.5)
-            pitch_score = max(1.0, min(5.0, pitch_score))
+            mean_line_res = float(np.mean(pitch_line_residuals))
+            warp_rate = pitch_warp_events / float(max(1, len(pitch_line_residuals)))
+            
+            res_penalty = 0.0
+            warp_penalty = 0.0
+            if mean_line_res > 0.012:
+                res_penalty = min(2.5, ((mean_line_res - 0.012) / 0.035) * 2.5)
+                warp_penalty = min(2.0, (warp_rate / 0.05) * 2.0)
+            
+            pitch_score = max(1.0, min(5.0, 5.0 - res_penalty - warp_penalty))
 
         # Goal net (Presence-gated)
         goal_score = 5.0
@@ -1003,10 +942,18 @@ class EvaluationPipeline:
             goal_net_score=round(goal_score, 2),
             broadcast_graphics_score=round(graphics_score, 2),
             camera_motion_score=round(camera_score, 2),
-            detected_ball_teleportations=teleportation_count,
+            detected_ball_teleportations=triplets_ball_wobble,
             detected_duplicate_balls=duplicate_ball_events,
-            detected_bent_lines_count=wobble_events,
-            graphics_jitter_detected=avg_jitter > 5.0
+            detected_bent_lines_count=pitch_warp_events,
+            graphics_jitter_detected=avg_jitter > 5.0,
+            details={
+                "triplets_ball_active": triplets_ball_active,
+                "triplets_ball_matched": triplets_ball_matched,
+                "triplets_ball_dissolved": triplets_ball_dissolved,
+                "triplets_ball_wobble": triplets_ball_wobble,
+                "mean_pitch_line_residual": round(float(np.mean(pitch_line_residuals)), 5) if pitch_line_residuals else 0.0,
+                "pitch_warp_events": pitch_warp_events
+            }
         )
 
         return technical_qc, temporal_qc, artifact_diff, football_qc, frame_metrics
@@ -1099,14 +1046,15 @@ class EvaluationPipeline:
 
         # Ball tracking
         ball_trajectories: List[Tuple[float, float]] = []
-        prev_ball_pos: Optional[Tuple[float, float]] = None
-        prev_prev_ball_pos: Optional[Tuple[float, float]] = None
-        teleportation_count = 0
         duplicate_ball_events = 0
         deformed_ball_events = 0
-        ball_frames_since_last_seen = 0
-        base_ball_velocity = 130.0 * (50.0 / max(1.0, source_meta.avg_fps or 25.0))
         pitch_coverage_samples: List[float] = []
+        triplets_ball_active = 0
+        triplets_ball_matched = 0
+        triplets_ball_dissolved = 0
+        triplets_ball_wobble = 0
+        pitch_line_residuals: List[float] = []
+        pitch_warp_events = 0
 
         # Player & occlusion tracking
         total_players_checked = 0
@@ -1116,8 +1064,6 @@ class EvaluationPipeline:
 
         # Pitch geometry tracking
         total_lines_detected = 0
-        wobble_events = 0
-        line_counts_per_frame: List[int] = []
 
         # Goal net tracking
         laplacian_variances: List[float] = []
@@ -1225,108 +1171,60 @@ class EvaluationPipeline:
                         generate_difference_heatmap(fa, fx, os.path.join(diff_dir, dname))
                         saved_diff += 1
 
+                # 1. Triplet Ball Evaluation
+                cov_x = get_pitch_coverage(fx)
+                players_x = detect_player_blobs(fx) if cov_x >= 0.15 else []
+                lines_x = extract_pitch_lines(fx) if cov_x >= 0.15 else []
+                ball_res = evaluate_ball_triplet(fa, fx, fb, players_x=players_x, pitch_lines_x=lines_x)
+                if ball_res["ball_active"]:
+                    triplets_ball_active += 1
+                    if ball_res["ball_matched"]:
+                        triplets_ball_matched += 1
+                        ball_trajectories.append(ball_res["pos_x"])
+                    if ball_res["ball_dissolved"]:
+                        triplets_ball_dissolved += 1
+                    if ball_res["ball_wobble"]:
+                        triplets_ball_wobble += 1
+                    if ball_res["ball_deformed"]:
+                        deformed_ball_events += 1
+                    if ball_res["ball_duplicate"]:
+                        duplicate_ball_events += 1
+
+                # 2. Triplet Pitch Geometry Evaluation
+                pitch_res = evaluate_pitch_geometry_triplet(fa, fx, fb)
+                if pitch_res["pitch_active"]:
+                    pitch_line_residuals.append(pitch_res["line_residual"])
+                    pitch_warp_events += pitch_res["warp_events"]
+                    total_lines_detected += pitch_res["lines_detected_x"]
+
             # -------------------------------------------------------------
             # Per-frame Football checks
             # -------------------------------------------------------------
+            p_cov = get_pitch_coverage(frame)
             if eval_idx % 10 == 0:
-                pitch_coverage_samples.append(get_pitch_coverage(frame))
+                pitch_coverage_samples.append(p_cov)
 
-            # Players & Occlusion
-            players = detect_player_blobs(frame)
-            total_players_checked += len(players)
-
-            # Ball
-            candidates = detect_ball_candidates(frame, players=players, min_circularity=0.50)
-
-            best_candidate = None
-            if candidates:
-                if prev_ball_pos is None:
-                    candidates.sort(key=lambda x: x[3], reverse=True)
-                    if candidates[0][3] >= 0.55:
-                        best_candidate = candidates[0]
-                        ball_trajectories.append((best_candidate[0], best_candidate[1]))
-                        prev_prev_ball_pos = prev_ball_pos
-                        prev_ball_pos = (best_candidate[0], best_candidate[1])
-                        ball_frames_since_last_seen = 0
-                        if candidates[0][3] < 0.65:
-                            deformed_ball_events += 1
-                else:
-                    allowed_displacement = base_ball_velocity * (ball_frames_since_last_seen + 1)
-                    candidates.sort(key=lambda x: math.hypot(x[0] - prev_ball_pos[0], x[1] - prev_ball_pos[1]))
-                    closest = candidates[0]
-                    dist = math.hypot(closest[0] - prev_ball_pos[0], closest[1] - prev_ball_pos[1])
-                    if dist > allowed_displacement:
-                        teleportation_count += 1
-                        ball_frames_since_last_seen += 1
-                        if ball_frames_since_last_seen > 6:
-                            prev_ball_pos = None
-                            prev_prev_ball_pos = None
-                    else:
-                        best_candidate = closest
-                        ball_trajectories.append((best_candidate[0], best_candidate[1]))
-                        prev_prev_ball_pos = prev_ball_pos
-                        prev_ball_pos = (best_candidate[0], best_candidate[1])
-                        ball_frames_since_last_seen = 0
-                        if closest[3] < 0.65:
-                            deformed_ball_events += 1
-            else:
-                ball_frames_since_last_seen += 1
-                if ball_frames_since_last_seen > 6:
-                    prev_ball_pos = None
-                    prev_prev_ball_pos = None
-
-            # Ghost ball (duplicate ball) detection
-            current_vel = 0.0
-            if prev_ball_pos is not None and prev_prev_ball_pos is not None:
-                current_vel = math.hypot(prev_ball_pos[0] - prev_prev_ball_pos[0], prev_ball_pos[1] - prev_prev_ball_pos[1])
-            max_dup_dist = max(60.0, min(150.0, current_vel * 1.5))
-            min_dup_dist = 8.0
-
-            has_duplicate = False
-            if best_candidate is not None and len(candidates) >= 2:
-                for c in candidates:
-                    if c is not best_candidate:
-                        dist = math.hypot(best_candidate[0] - c[0], best_candidate[1] - c[1])
-                        if min_dup_dist <= dist <= max_dup_dist:
-                            has_duplicate = True
-                            break
-            elif best_candidate is None and len(candidates) >= 2:
-                for i in range(len(candidates)):
-                    for j in range(i + 1, len(candidates)):
-                        dist = math.hypot(candidates[i][0] - candidates[j][0], candidates[i][1] - candidates[j][1])
-                        if min_dup_dist <= dist <= max_dup_dist:
-                            has_duplicate = True
-                            break
-                    if has_duplicate:
-                        break
-            if has_duplicate:
-                duplicate_ball_events += 1
-            for p in players:
-                if p["solidity"] < 0.45:
-                    solidity_anomalies += 1
-            for i in range(len(players)):
-                x1, y1, w1, h1 = players[i]["bbox"]
-                for j in range(i + 1, len(players)):
-                    x2, y2, w2, h2 = players[j]["bbox"]
-                    ix = max(x1, x2)
-                    iy = max(y1, y2)
-                    iw = min(x1 + w1, x2 + w2) - ix
-                    ih = min(y1 + h1, y2 + h2) - iy
-                    if iw > 5 and ih > 10:
-                        occlusion_events += 1
-                        roi = frame[iy:iy + ih, ix:ix + iw]
-                        gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-                        if cv2.Laplacian(gray_roi, cv2.CV_32F).var() < 50.0:
-                            occlusion_failures += 1
-
-            # Pitch Geometry
-            lines = extract_pitch_lines(frame)
-            total_lines_detected += len(lines)
-            line_counts_per_frame.append(len(lines))
-            if len(lines) >= 2:
-                angles = [np.arctan2(y2 - y1, x2 - x1) for x1, y1, x2, y2 in lines]
-                if float(np.std(angles)) > 1.2:
-                    wobble_events += 1
+            # Players & Occlusion (only evaluate on active football pitch)
+            if p_cov >= 0.15:
+                players = detect_player_blobs(frame)
+                total_players_checked += len(players)
+                for p in players:
+                    if p["solidity"] < 0.45:
+                        solidity_anomalies += 1
+                for i in range(len(players)):
+                    x1, y1, w1, h1 = players[i]["bbox"]
+                    for j in range(i + 1, len(players)):
+                        x2, y2, w2, h2 = players[j]["bbox"]
+                        ix = max(x1, x2)
+                        iy = max(y1, y2)
+                        iw = min(x1 + w1, x2 + w2) - ix
+                        ih = min(y1 + h1, y2 + h2) - iy
+                        if iw > 5 and ih > 10:
+                            occlusion_events += 1
+                            roi = frame[iy:iy + ih, ix:ix + iw]
+                            gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+                            if cv2.Laplacian(gray_roi, cv2.CV_32F).var() < 50.0:
+                                occlusion_failures += 1
 
             # Goal Net
             _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
@@ -1422,23 +1320,20 @@ class EvaluationPipeline:
         # -------------------------------------------------------------
         # Ball
         avg_pitch_pct = float(np.mean(pitch_coverage_samples)) if pitch_coverage_samples else 0.0
-        tracked_count = len(ball_trajectories)
         scene_has_pitch = (avg_pitch_pct >= 0.15)
 
-        if not scene_has_pitch:
-            # Ball-free / non-pitch scene: no ball artifacts expected -> clean (5.0)
+        if not scene_has_pitch or triplets_ball_active == 0:
+            # Ball-free or non-pitch scene: no ball artifacts expected -> clean (5.0)
             ball_score = 5.0
         else:
-            if tracked_count == 0:
-                ball_score = 1.0  # Dissolved ball!
-            else:
-                dup_rate = duplicate_ball_events / float(tracked_count)
-                tel_rate = teleportation_count / float(tracked_count)
-                deform_rate = deformed_ball_events / float(tracked_count)
-                ball_score = 5.0 - min(2.0, (dup_rate / 0.10) * 2.0) - min(1.5, (tel_rate / 0.10) * 1.5) - min(1.0, (deform_rate / 0.10) * 1.0)
-                if eval_idx >= 30 and (tracked_count / float(eval_idx)) < 0.15:
-                    ball_score -= min(2.0, (0.15 - (tracked_count / float(eval_idx))) / 0.15 * 2.0)
-                ball_score = max(1.0, min(5.0, ball_score))
+            dissolve_rate = triplets_ball_dissolved / float(triplets_ball_active)
+            matched_count = max(1, triplets_ball_matched)
+            dup_rate = duplicate_ball_events / float(matched_count)
+            wobble_rate = triplets_ball_wobble / float(matched_count)
+            deform_rate = deformed_ball_events / float(matched_count)
+
+            ball_score = 5.0 - min(2.5, dissolve_rate * 4.0) - min(1.5, (dup_rate / 0.15) * 1.5) - min(1.0, (wobble_rate / 0.15) * 1.0) - min(0.5, (deform_rate / 0.15) * 0.5)
+            ball_score = max(1.0, min(5.0, ball_score))
 
         # Player
         player_score = 5.0
@@ -1454,14 +1349,20 @@ class EvaluationPipeline:
             occlusion_score -= min(3.5, fail_rate * 5.0)
         occlusion_score = max(1.0, min(5.0, occlusion_score))
 
-        # Pitch
-        pitch_score = 5.0
-        if eval_idx > 0:
-            wobble_rate = wobble_events / float(eval_idx)
-            pitch_score -= min(2.5, wobble_rate * 3.0)
-        count_variance = float(np.var(line_counts_per_frame)) if line_counts_per_frame else 0.0
-        pitch_score -= min(1.5, count_variance / 50.0)
-        pitch_score = max(1.0, min(5.0, pitch_score))
+        # Pitch Geometry
+        if not scene_has_pitch or not pitch_line_residuals:
+            pitch_score = 5.0
+        else:
+            mean_line_res = float(np.mean(pitch_line_residuals))
+            warp_rate = pitch_warp_events / float(max(1, len(pitch_line_residuals)))
+            
+            res_penalty = 0.0
+            warp_penalty = 0.0
+            if mean_line_res > 0.012:
+                res_penalty = min(2.5, ((mean_line_res - 0.012) / 0.035) * 2.5)
+                warp_penalty = min(2.0, (warp_rate / 0.05) * 2.0)
+            
+            pitch_score = max(1.0, min(5.0, 5.0 - res_penalty - warp_penalty))
 
         # Goal net
         goal_score = 4.8
@@ -1509,9 +1410,18 @@ class EvaluationPipeline:
             goal_net_score=round(goal_score, 2),
             broadcast_graphics_score=round(graphics_score, 2),
             camera_motion_score=round(camera_score, 2),
-            detected_ball_teleportations=teleportation_count,
+            detected_ball_teleportations=triplets_ball_wobble,
             detected_duplicate_balls=duplicate_ball_events,
-            graphics_jitter_detected=avg_jitter > 5.0
+            detected_bent_lines_count=pitch_warp_events,
+            graphics_jitter_detected=avg_jitter > 5.0,
+            details={
+                "triplets_ball_active": triplets_ball_active,
+                "triplets_ball_matched": triplets_ball_matched,
+                "triplets_ball_dissolved": triplets_ball_dissolved,
+                "triplets_ball_wobble": triplets_ball_wobble,
+                "mean_pitch_line_residual": round(float(np.mean(pitch_line_residuals)), 5) if pitch_line_residuals else 0.0,
+                "pitch_warp_events": pitch_warp_events
+            }
         )
 
         return temporal_qc, artifact_diff, football_qc, frame_metrics

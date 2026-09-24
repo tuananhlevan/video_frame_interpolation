@@ -22,19 +22,21 @@ class GPUWorker:
         device: str,
         model_name: str = "rife",
         checkpoint_path: Optional[str] = None,
-        fp16: bool = True
+        fp16: bool = True,
+        tta: bool = False
     ) -> None:
         self.device = device
         self.model_name = model_name
         self.checkpoint_path = checkpoint_path
         self.fp16 = fp16
+        self.tta = tta
         self.model: Optional[BaseVFIModel] = None
 
     def initialize(self) -> None:
         """Initializes model on worker's device."""
         model_cls = ModelRegistry.get(self.model_name)
         self.model = model_cls()
-        self.model.load(device=self.device, checkpoint_path=self.checkpoint_path, fp16=self.fp16)
+        self.model.load(device=self.device, checkpoint_path=self.checkpoint_path, fp16=self.fp16, tta=self.tta)
         logger.info(f"Worker initialized on {self.device} with model {self.model_name}")
 
     def process_chunk(self, task: ChunkTask) -> ChunkResult:
@@ -125,7 +127,7 @@ class GPUWorker:
                     encoder.write_frame(f_curr)
                 else:
                     # Run VFI model
-                    inter = self.model.interpolate(f_curr, f_next)
+                    inter = self.model.interpolate(f_curr, f_next, tta=self.tta)
                     encoder.write_frame(inter)
                 
                 total_output_frames += 1

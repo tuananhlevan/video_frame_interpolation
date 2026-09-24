@@ -30,8 +30,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("-m", "--model", default="rife",
                         choices=["rife", "blend", "amt", "amt-s", "amt-l", "amt-g",
-                                 "film", "ifrnet", "gmfss", "ema-vfi", "ema-vfi-s"],
-                        help="VFI model to use (default: rife)")
+                                 "film", "ifrnet", "gmfss", "ema-vfi", "ema-vfi-s",
+                                 "interpany", "interpany-vgg", "interpany-pro",
+                                 "bwdif", "deinterlace", "auto"],
+                        help="VFI model or deinterlacer to use (default: rife; use 'bwdif' or 'auto' for interlaced broadcast)")
+    parser.add_argument("--deinterlace", default="auto",
+                        choices=["auto", "bwdif", "none"],
+                        help="Deinterlacing mode: 'auto' (detect and adapt), 'bwdif' (force BWDIF 50fps), 'none' (disable deinterlacing)")
     parser.add_argument("--gpus", default=None, help="Comma-separated GPU indices (e.g. '0,1,2') or 'cpu'")
     parser.add_argument("--workers", "-w", type=int, default=None,
                         help="Number of concurrent chunk workers (default: number of GPUs or 1 for CPU)")
@@ -50,6 +55,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default=None, help="Path to YAML configuration file")
     parser.add_argument("--fp16", dest="fp16", action="store_true", default=True, help="Enable FP16 inference")
     parser.add_argument("--no-fp16", dest="fp16", action="store_false", help="Disable FP16 inference")
+    parser.add_argument("--tta", dest="tta", action="store_true", default=False,
+                        help="Enable Test-Time Augmentation (flip ensemble) for models that support it (e.g. EMA-VFI)")
     parser.add_argument("--log-dir", default="upframe_log", help="Directory for execution log files (default: upframe_log)")
     parser.add_argument("--log-file", default=None, help="Path to write execution log file (default: upframe_log/<output_name>.log)")
 
@@ -115,6 +122,9 @@ def parse_cli_args(args_list: Optional[List[str]] = None) -> Tuple[str, str, Pip
     if args.workers is not None:
         config.workers = max(1, args.workers)
     config.fp16 = args.fp16
+    config.tta = args.tta
+    if args.deinterlace != "auto" or not args.config:
+        config.deinterlace = args.deinterlace
     if args.log_dir != "upframe_log" or not args.config:
         config.log_dir = args.log_dir
 

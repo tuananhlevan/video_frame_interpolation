@@ -18,12 +18,14 @@ class WorkerPool:
         devices: List[str],
         model_name: str = "rife",
         checkpoint_path: Optional[str] = None,
-        fp16: bool = True
+        fp16: bool = True,
+        tta: bool = False
     ) -> None:
         self.devices = devices or ["cpu"]
         self.model_name = model_name
         self.checkpoint_path = checkpoint_path
         self.fp16 = fp16
+        self.tta = tta
         self.workers: Dict[str, GPUWorker] = {}
         self._initialize_workers()
 
@@ -33,7 +35,8 @@ class WorkerPool:
                 device=dev,
                 model_name=self.model_name,
                 checkpoint_path=self.checkpoint_path,
-                fp16=self.fp16
+                fp16=self.fp16,
+                tta=self.tta
             )
             worker.initialize()
             self.workers[dev] = worker

@@ -43,8 +43,21 @@ def main() -> int:
     logger.info(
         f"Input: {metadata.width}x{metadata.height} @ ~{metadata.nominal_fps:.2f} fps, "
         f"Duration: {metadata.duration:.2f}s, Frames: {metadata.nb_frames:,}, "
-        f"Audio: {'Yes' if metadata.has_audio else 'No'}"
+        f"Audio: {'Yes' if metadata.has_audio else 'No'}, "
+        f"Scan: {'Interlaced (' + (metadata.field_order.upper() if metadata.field_order else 'TFF') + ')' if metadata.is_interlaced else 'Progressive'}"
     )
+
+    if metadata.is_interlaced and config.model in (
+        "rife", "gmfss", "amt", "amt-s", "amt-l", "amt-g",
+        "interpany", "interpany-vgg", "interpany-pro",
+        "ema-vfi", "ema-vfi-s", "film", "ifrnet"
+    ):
+        logger.warning(
+            "⚠️  BROADCAST INTERLACED VIDEO DETECTED (1080i)!\n"
+            "   The source video contains two temporal fields per container frame (odd/even scanlines).\n"
+            "   Optical flow neural networks assume progressive input and may cause ball ghosting / comb tearing.\n"
+            "   RECOMMENDATION: Use '--model bwdif' (or '--model auto') for pristine 50 fps field separation with 0 artifacts."
+        )
 
     scheduler = PipelineScheduler(
         metadata=metadata,
@@ -60,9 +73,11 @@ def main() -> int:
         use_nvenc=config.use_nvenc,
         resume=config.resume,
         fp16=config.fp16,
+        tta=config.tta,
         max_retries=config.max_retries,
         workers=config.workers,
-        log_dir=config.log_dir
+        log_dir=config.log_dir,
+        deinterlace=config.deinterlace
     )
 
     try:
