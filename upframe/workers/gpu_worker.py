@@ -194,6 +194,11 @@ def worker_process_entrypoint(
         device=device,
         model_name=task.model_name,
         checkpoint_path=task.checkpoint_path,
-        fp16=task.fp16
+        fp16=task.fp16,
+        tta=getattr(task, "tta", False),
+        ball_refine=getattr(task, "ball_refine", False),
+        cadence_filter=getattr(task, "cadence_filter", False),
+        scale=getattr(task, "scale", 1.0),
     )
     return worker.process_chunk(task)
+
