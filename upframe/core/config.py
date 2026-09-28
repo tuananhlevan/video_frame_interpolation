@@ -28,6 +28,9 @@ class PipelineConfig:
     log_dir: str = "upframe_log"
     log_file: Optional[str] = None
     deinterlace: str = "auto"
+    ball_refine: bool = False
+    cadence_filter: bool = False
+    scale: float = 1.0
 
     @classmethod
     def from_yaml(cls, path: str) -> "PipelineConfig":

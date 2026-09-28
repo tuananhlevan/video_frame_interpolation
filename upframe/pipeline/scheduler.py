@@ -42,7 +42,10 @@ class PipelineScheduler:
         tta: bool = False,
         workers: Optional[int] = None,
         log_dir: str = "upframe_log",
-        deinterlace: str = "auto"
+        deinterlace: str = "auto",
+        ball_refine: bool = False,
+        cadence_filter: bool = False,
+        scale: float = 1.0
     ) -> None:
         self.metadata = metadata
         self.output_filepath = os.path.abspath(output_filepath)
@@ -60,6 +63,9 @@ class PipelineScheduler:
         self.workers = workers
         self.log_dir = log_dir or "upframe_log"
         self.deinterlace = deinterlace
+        self.ball_refine = ball_refine
+        self.cadence_filter = cadence_filter
+        self.scale = scale
 
         output_stem = os.path.splitext(os.path.basename(self.output_filepath))[0]
 
@@ -159,7 +165,10 @@ class PipelineScheduler:
                     color_space=self.metadata.color_space,
                     color_primaries=self.metadata.color_primaries,
                     color_transfer=self.metadata.color_transfer,
-                    color_range=self.metadata.color_range
+                    color_range=self.metadata.color_range,
+                    ball_refine=self.ball_refine,
+                    cadence_filter=self.cadence_filter,
+                    scale=self.scale
                 )
             )
 
@@ -183,7 +192,10 @@ class PipelineScheduler:
             model_name=self.model_name,
             checkpoint_path=self.checkpoint_path,
             fp16=self.fp16,
-            tta=self.tta
+            tta=self.tta,
+            ball_refine=self.ball_refine,
+            cadence_filter=self.cadence_filter,
+            scale=self.scale
         )
 
         executed_results = pool.execute(

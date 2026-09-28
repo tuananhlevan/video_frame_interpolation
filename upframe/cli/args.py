@@ -57,6 +57,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-fp16", dest="fp16", action="store_false", help="Disable FP16 inference")
     parser.add_argument("--tta", dest="tta", action="store_true", default=False,
                         help="Enable Test-Time Augmentation (flip ensemble) for models that support it (e.g. EMA-VFI)")
+    parser.add_argument("--ball-refine", dest="ball_refine", action="store_true", default=False,
+                        help="Enable football ball-trajectory refiner and ghost suppressor")
+    parser.add_argument("--cadence-filter", dest="cadence_filter", action="store_true", default=False,
+                        help="Enable slow-motion duplicate-frame cadence filter")
+    parser.add_argument("--scale", type=float, default=1.0,
+                        help="Optical flow motion scale factor [0.5 - 2.0] (default: 1.0)")
     parser.add_argument("--log-dir", default="upframe_log", help="Directory for execution log files (default: upframe_log)")
     parser.add_argument("--log-file", default=None, help="Path to write execution log file (default: upframe_log/<output_name>.log)")
 
@@ -123,6 +129,10 @@ def parse_cli_args(args_list: Optional[List[str]] = None) -> Tuple[str, str, Pip
         config.workers = max(1, args.workers)
     config.fp16 = args.fp16
     config.tta = args.tta
+    config.ball_refine = args.ball_refine
+    config.cadence_filter = args.cadence_filter
+    if args.scale != 1.0 or not args.config:
+        config.scale = args.scale
     if args.deinterlace != "auto" or not args.config:
         config.deinterlace = args.deinterlace
     if args.log_dir != "upframe_log" or not args.config:

@@ -77,7 +77,10 @@ def main() -> int:
         max_retries=config.max_retries,
         workers=config.workers,
         log_dir=config.log_dir,
-        deinterlace=config.deinterlace
+        deinterlace=config.deinterlace,
+        ball_refine=config.ball_refine,
+        cadence_filter=config.cadence_filter,
+        scale=config.scale
     )
 
     try:

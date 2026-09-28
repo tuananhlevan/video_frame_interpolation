@@ -19,13 +19,19 @@ class WorkerPool:
         model_name: str = "rife",
         checkpoint_path: Optional[str] = None,
         fp16: bool = True,
-        tta: bool = False
+        tta: bool = False,
+        ball_refine: bool = False,
+        cadence_filter: bool = False,
+        scale: float = 1.0
     ) -> None:
         self.devices = devices or ["cpu"]
         self.model_name = model_name
         self.checkpoint_path = checkpoint_path
         self.fp16 = fp16
         self.tta = tta
+        self.ball_refine = ball_refine
+        self.cadence_filter = cadence_filter
+        self.scale = scale
         self.workers: Dict[str, GPUWorker] = {}
         self._initialize_workers()
 
@@ -36,7 +42,10 @@ class WorkerPool:
                 model_name=self.model_name,
                 checkpoint_path=self.checkpoint_path,
                 fp16=self.fp16,
-                tta=self.tta
+                tta=self.tta,
+                ball_refine=self.ball_refine,
+                cadence_filter=self.cadence_filter,
+                scale=self.scale
             )
             worker.initialize()
             self.workers[dev] = worker

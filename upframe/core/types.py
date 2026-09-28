@@ -93,6 +93,9 @@ class ChunkTask:
     color_primaries: Optional[str] = None
     color_transfer: Optional[str] = None
     color_range: Optional[str] = None
+    ball_refine: bool = False
+    cadence_filter: bool = False
+    scale: float = 1.0
 
 
 @dataclass

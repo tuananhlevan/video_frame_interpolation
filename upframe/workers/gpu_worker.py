@@ -7,6 +7,8 @@ from typing import List, Optional
 import numpy as np
 from upframe.core.types import ChunkResult, ChunkTask
 from upframe.models.base import BaseVFIModel, ModelRegistry
+from upframe.pipeline.ball_refiner import BallRefiner
+from upframe.pipeline.cadence import is_duplicate_frame
 from upframe.pipeline.decode import VideoDecoder
 from upframe.pipeline.encode import VideoEncoder
 from upframe.pipeline.scene_detect import is_scene_cut
@@ -23,14 +25,21 @@ class GPUWorker:
         model_name: str = "rife",
         checkpoint_path: Optional[str] = None,
         fp16: bool = True,
-        tta: bool = False
+        tta: bool = False,
+        ball_refine: bool = False,
+        cadence_filter: bool = False,
+        scale: float = 1.0
     ) -> None:
         self.device = device
         self.model_name = model_name
         self.checkpoint_path = checkpoint_path
         self.fp16 = fp16
         self.tta = tta
+        self.ball_refine = ball_refine
+        self.cadence_filter = cadence_filter
+        self.scale = scale
         self.model: Optional[BaseVFIModel] = None
+        self.ball_refiner: Optional[BallRefiner] = BallRefiner() if ball_refine else None
 
     def initialize(self) -> None:
         """Initializes model on worker's device."""
@@ -110,6 +119,13 @@ class GPUWorker:
             scene_cuts = 0
             total_output_frames = 0
 
+            use_cadence = getattr(task, "cadence_filter", False) or self.cadence_filter
+            use_ball_refine = getattr(task, "ball_refine", False) or self.ball_refine
+            scale_val = getattr(task, "scale", 1.0) or self.scale
+
+            if use_ball_refine and self.ball_refiner is None:
+                self.ball_refiner = BallRefiner()
+
             # Generate 50 fps interleaved frames:
             # F[0], F_inter[0.5], F[1], F_inter[1.5], ..., F[N-1]
             for i in range(len(source_frames) - 1):
@@ -125,9 +141,14 @@ class GPUWorker:
                     scene_cuts += 1
                     # Avoid hybrid blur: hold/duplicate current frame
                     encoder.write_frame(f_curr)
+                elif use_cadence and is_duplicate_frame(f_curr, f_next):
+                    # Duplicate pair in slow-motion replay: preserve smooth cadence without AI hallucination
+                    encoder.write_frame(f_curr)
                 else:
                     # Run VFI model
-                    inter = self.model.interpolate(f_curr, f_next, tta=self.tta)
+                    inter = self.model.interpolate(f_curr, f_next, tta=self.tta, scale=scale_val)
+                    if use_ball_refine and self.ball_refiner is not None:
+                        inter = self.ball_refiner.refine(f_curr, inter, f_next, timestep=0.5)
                     encoder.write_frame(inter)
                 
                 total_output_frames += 1
