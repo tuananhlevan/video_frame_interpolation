@@ -11,7 +11,7 @@ class PipelineConfig:
     """Complete configuration for an upframing job."""
     model: str = "rife"
     gpus: Optional[List[int]] = None
-    chunk_size: int = 1000
+    chunk_size: Optional[int] = None
     scene_threshold: float = 0.35
     crf: int = 18
     preset: str = "medium"

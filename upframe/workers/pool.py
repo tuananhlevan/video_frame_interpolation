@@ -32,11 +32,11 @@ class WorkerPool:
         self.ball_refine = ball_refine
         self.cadence_filter = cadence_filter
         self.scale = scale
-        self.workers: Dict[str, GPUWorker] = {}
+        self.workers: Dict[int, GPUWorker] = {}
         self._initialize_workers()
 
     def _initialize_workers(self) -> None:
-        for dev in self.devices:
+        for idx, dev in enumerate(self.devices):
             worker = GPUWorker(
                 device=dev,
                 model_name=self.model_name,
@@ -48,7 +48,7 @@ class WorkerPool:
                 scale=self.scale
             )
             worker.initialize()
-            self.workers[dev] = worker
+            self.workers[idx] = worker
 
     def execute(
         self,
@@ -64,16 +64,16 @@ class WorkerPool:
         num_workers = len(self.devices)
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
             task_idx = 0
-            futures: Dict[Future[ChunkResult], Tuple[ChunkTask, str, int]] = {}
-            device_pool = list(self.devices)
+            futures: Dict[Future[ChunkResult], Tuple[ChunkTask, int, int]] = {}
+            worker_pool = list(range(num_workers))
 
             # Fill initial queue
-            while device_pool and task_idx < len(tasks):
-                dev = device_pool.pop(0)
+            while worker_pool and task_idx < len(tasks):
+                w_id = worker_pool.pop(0)
                 task = tasks[task_idx]
-                task.device = dev
-                fut = executor.submit(self.workers[dev].process_chunk, task)
-                futures[fut] = (task, dev, 0)
+                task.device = self.devices[w_id]
+                fut = executor.submit(self.workers[w_id].process_chunk, task)
+                futures[fut] = (task, w_id, 0)
                 task_idx += 1
 
             while futures:
@@ -83,7 +83,8 @@ class WorkerPool:
                     continue
 
                 for fut in done_futs:
-                    task, dev, retry_count = futures.pop(fut)
+                    task, w_id, retry_count = futures.pop(fut)
+                    dev = self.devices[w_id]
                     try:
                         res: ChunkResult = fut.result()
                     except Exception as e:
@@ -105,25 +106,25 @@ class WorkerPool:
                     else:
                         if retry_count < max_retries:
                             logger.warning(
-                                f"Chunk {task.chunk_id} failed on {dev}: {res.error_message}. "
+                                f"Chunk {task.chunk_id} failed on worker {w_id} ({dev}): {res.error_message}. "
                                 f"Retrying ({retry_count + 1}/{max_retries})..."
                             )
-                            new_fut = executor.submit(self.workers[dev].process_chunk, task)
-                            futures[new_fut] = (task, dev, retry_count + 1)
+                            new_fut = executor.submit(self.workers[w_id].process_chunk, task)
+                            futures[new_fut] = (task, w_id, retry_count + 1)
                             continue
                         else:
                             raise RuntimeError(
                                 f"Chunk {task.chunk_id} failed after {max_retries} retries: {res.error_message}"
                             )
 
-                    # Reassign freed device to next pending task
+                    # Reassign freed worker to next pending task
                     if task_idx < len(tasks):
                         next_task = tasks[task_idx]
                         next_task.device = dev
-                        new_fut = executor.submit(self.workers[dev].process_chunk, next_task)
-                        futures[new_fut] = (next_task, dev, 0)
+                        new_fut = executor.submit(self.workers[w_id].process_chunk, next_task)
+                        futures[new_fut] = (next_task, w_id, 0)
                         task_idx += 1
                     else:
-                        device_pool.append(dev)
+                        worker_pool.append(w_id)
 
         return results

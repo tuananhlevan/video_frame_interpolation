@@ -39,8 +39,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Deinterlacing mode: 'auto' (detect and adapt), 'bwdif' (force BWDIF 50fps), 'none' (disable deinterlacing)")
     parser.add_argument("--gpus", default=None, help="Comma-separated GPU indices (e.g. '0,1,2') or 'cpu'")
     parser.add_argument("--workers", "-w", type=int, default=None,
-                        help="Number of concurrent chunk workers (default: number of GPUs or 1 for CPU)")
-    parser.add_argument("--chunk-size", type=int, default=1000, help="Frames per processing chunk (default: 1000)")
+                        help="Number of concurrent chunk workers (default: auto-calculated from GPU VRAM)")
+    parser.add_argument("--chunk-size", type=int, default=None,
+                        help="Frames per processing chunk (default: auto-calculated from GPU VRAM & video duration)")
+
     parser.add_argument("--scene-threshold", type=float, default=0.35,
                         help="Scene cut sensitivity threshold [0.0 - 1.0] (default: 0.35)")
     parser.add_argument("--weights", default=None, help="Path to pretrained model checkpoint")

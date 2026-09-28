@@ -29,7 +29,7 @@ class PipelineScheduler:
         output_filepath: str,
         model_name: str = "rife",
         gpus: Optional[List[int]] = None,
-        chunk_size: int = 1000,
+        chunk_size: Optional[int] = None,
         scene_threshold: float = 0.35,
         temp_dir: Optional[str] = None,
         checkpoint_path: Optional[str] = None,
@@ -83,32 +83,32 @@ class PipelineScheduler:
             os.path.join(self.temp_dir, "pipeline_state.json"),
             enabled=True
         )
+        # Dynamic Resource & Chunk auto-allocation based on GPU VRAM, System RAM, and Model Footprint
+        from upframe.pipeline.resource_allocator import calculate_optimal_allocation
+
+        total_frames = self.metadata.nb_frames
+        if total_frames <= 0:
+            total_frames = int(round(self.metadata.duration * self.metadata.nominal_fps))
+
+        alloc_devices, alloc_chunk_size, alloc_info = calculate_optimal_allocation(
+            model_name=self.model_name,
+            total_frames=total_frames,
+            width=self.metadata.width,
+            height=self.metadata.height,
+            user_workers=self.workers,
+            user_chunk_size=self.chunk_size,
+            user_gpus=gpus,
+            tta=self.tta
+        )
+        self.devices = alloc_devices
+        self.chunk_size = alloc_chunk_size
         self.partitioner = ChunkPartitioner(chunk_size=self.chunk_size, overlap=1)
 
-        # Device determination
-        import torch
-        base_devices: List[str] = []
-        if gpus is not None and len(gpus) > 0 and torch.cuda.is_available():
-            base_devices = [f"cuda:{g}" for g in gpus if g < torch.cuda.device_count()]
-            if not base_devices:
-                base_devices = ["cuda:0"]
-        elif gpus is not None and len(gpus) == 0:
-            base_devices = ["cpu"]
-        elif torch.cuda.is_available():
-            count = torch.cuda.device_count()
-            base_devices = [f"cuda:{i}" for i in range(count)]
-        else:
-            base_devices = ["cpu"]
-
-        if self.workers is not None and self.workers > 0:
-            if base_devices == ["cpu"]:
-                self.devices = ["cpu"] * self.workers
-            else:
-                self.devices = [base_devices[i % len(base_devices)] for i in range(self.workers)]
-        else:
-            self.devices = base_devices
-
-        logger.info(f"Initialized scheduler with {len(self.devices)} workers on devices: {self.devices}")
+        logger.info(
+            f"Resource allocation: {len(self.devices)} workers mapped to {self.devices} | "
+            f"Chunk size: {self.chunk_size} frames (~{alloc_info['estimated_chunks']} chunks) | "
+            f"Hardware: {', '.join(alloc_info['gpus_detected'])}"
+        )
 
     def generate_chunk_ranges(self) -> List[tuple[int, int, int]]:
         """Generates (chunk_id, start_frame, end_frame) tuples with 1-frame boundary overlap."""
