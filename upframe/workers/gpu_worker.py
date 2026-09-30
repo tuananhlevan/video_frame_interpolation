@@ -3,7 +3,7 @@
 import logging
 import os
 import time
-from typing import List, Optional
+from typing import Any, List, Optional
 import numpy as np
 from upframe.core.types import ChunkResult, ChunkTask
 from upframe.models.base import BaseVFIModel, ModelRegistry
@@ -31,7 +31,8 @@ class GPUWorker:
         cadence_filter: bool = False,
         anti_flicker: bool = False,
         scale: float = 1.0,
-        batch_size: int = 1
+        batch_size: int = 1,
+        device_lock: Optional[Any] = None
     ) -> None:
         self.device = device
         self.model_name = model_name
@@ -43,6 +44,7 @@ class GPUWorker:
         self.anti_flicker = anti_flicker
         self.scale = scale
         self.batch_size = max(1, batch_size)
+        self.device_lock = device_lock
         self.model: Optional[BaseVFIModel] = None
         self.ball_refiner: Optional[BallRefiner] = BallRefiner() if ball_refine else None
         self.temporal_anti_flicker: Optional[TemporalAntiFlicker] = TemporalAntiFlicker() if anti_flicker else None
@@ -181,9 +183,17 @@ class GPUWorker:
                             for f in pairs_to_interpolate_b
                         ])
 
-                        pred_batch = self.model.interpolate_batch(
-                            batch_a, batch_b, tta=self.tta, scale=scale_val
-                        )
+                        if self.device_lock is not None:
+                            with self.device_lock:
+                                pred_batch = self.model.interpolate_batch(
+                                    batch_a, batch_b, tta=self.tta, scale=scale_val
+                                )
+                        else:
+                            pred_batch = self.model.interpolate_batch(
+                                batch_a, batch_b, tta=self.tta, scale=scale_val
+                            )
+
+                        del batch_a, batch_b
 
                         pred_clean = (
                             pred_batch.detach()
@@ -195,6 +205,7 @@ class GPUWorker:
                             .to(torch.uint8)
                         )
                         pred_np_frames = pred_clean.permute(0, 2, 3, 1).cpu().numpy()
+                        del pred_batch, pred_clean
 
                         for k, local_idx in enumerate(vfi_indices):
                             inter_np = pred_np_frames[k]
@@ -233,7 +244,11 @@ class GPUWorker:
                         encoder.write_frame(f_curr)
                     else:
                         # Run VFI model
-                        inter = self.model.interpolate(f_curr, f_next, tta=self.tta, scale=scale_val)
+                        if self.device_lock is not None:
+                            with self.device_lock:
+                                inter = self.model.interpolate(f_curr, f_next, tta=self.tta, scale=scale_val)
+                        else:
+                            inter = self.model.interpolate(f_curr, f_next, tta=self.tta, scale=scale_val)
                         if use_ball_refine and self.ball_refiner is not None:
                             inter = self.ball_refiner.refine(f_curr, inter, f_next, timestep=0.5)
                         if use_anti_flicker and self.temporal_anti_flicker is not None:
