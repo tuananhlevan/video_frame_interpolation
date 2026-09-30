@@ -58,3 +58,23 @@ def test_user_override():
         )
         assert len(devs) == 3
         assert csize == 500
+
+
+def test_surplus_resource_optimization_a100():
+    """Verify that A100 with 38GB free VRAM allocates in the 50-70% target range with batched inference."""
+    mock_a100 = [
+        {'index': 0, 'name': 'NVIDIA A100-SXM4-40GB', 'total_vram_gb': 40.0, 'free_vram_gb': 38.0}
+    ]
+    with patch.object(resource_allocator, 'get_gpu_info', return_value=mock_a100), \
+         patch.object(resource_allocator, 'get_system_ram_gb', return_value=64.0), \
+         patch("os.cpu_count", return_value=32):
+        devs_rife, csize_rife, info_rife = resource_allocator.calculate_optimal_allocation(
+            "rife", total_frames=13151, target_resource_ratio=0.65
+        )
+        # Should allocate multiple workers and batch_size >= 4
+        assert len(devs_rife) >= 6
+        assert info_rife["optimal_batch_size"] >= 4
+        # Target surplus VRAM usage must fall within 50% - 70% of free VRAM
+        est_vram = info_rife["estimated_vram_gb"]
+        pct_used = (est_vram / 38.0) * 100
+        assert 50.0 <= pct_used <= 70.0, f"Expected 50-70% VRAM usage, got {pct_used:.1f}% ({est_vram}GB)"

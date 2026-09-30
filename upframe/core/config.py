@@ -32,6 +32,8 @@ class PipelineConfig:
     cadence_filter: bool = False
     scale: float = 1.0
     anti_flicker: bool = False
+    batch_size: Optional[int] = None
+    target_resource_ratio: float = 0.65
 
 
     @classmethod

@@ -23,7 +23,8 @@ class WorkerPool:
         ball_refine: bool = False,
         cadence_filter: bool = False,
         anti_flicker: bool = False,
-        scale: float = 1.0
+        scale: float = 1.0,
+        batch_size: int = 1
     ) -> None:
         self.devices = devices or ["cpu"]
         self.model_name = model_name
@@ -34,6 +35,7 @@ class WorkerPool:
         self.cadence_filter = cadence_filter
         self.anti_flicker = anti_flicker
         self.scale = scale
+        self.batch_size = batch_size
         self.workers: Dict[int, GPUWorker] = {}
         self._initialize_workers()
 
@@ -48,7 +50,8 @@ class WorkerPool:
                 ball_refine=self.ball_refine,
                 cadence_filter=self.cadence_filter,
                 anti_flicker=self.anti_flicker,
-                scale=self.scale
+                scale=self.scale,
+                batch_size=self.batch_size
             )
             worker.initialize()
             self.workers[idx] = worker

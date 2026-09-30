@@ -15,7 +15,6 @@ from upframe.pipeline.partitioner import ChunkPartitioner
 from upframe.pipeline.probe import probe_video
 from upframe.pipeline.state import StateStore
 from upframe.utils.ffmpeg import find_binary, format_duration, is_nvenc_available
-from upframe.workers.pool import WorkerPool
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +40,8 @@ class PipelineScheduler:
         fp16: bool = True,
         tta: bool = False,
         workers: Optional[int] = None,
+        batch_size: Optional[int] = None,
+        target_resource_ratio: float = 0.65,
         log_dir: str = "upframe_log",
         deinterlace: str = "auto",
         ball_refine: bool = False,
@@ -62,6 +63,8 @@ class PipelineScheduler:
         self.fp16 = fp16
         self.tta = tta
         self.workers = workers
+        self.batch_size = batch_size
+        self.target_resource_ratio = target_resource_ratio
         self.log_dir = log_dir or "upframe_log"
         self.deinterlace = deinterlace
         self.ball_refine = ball_refine
@@ -85,7 +88,7 @@ class PipelineScheduler:
             os.path.join(self.temp_dir, "pipeline_state.json"),
             enabled=True
         )
-        # Dynamic Resource & Chunk auto-allocation based on GPU VRAM, System RAM, and Model Footprint
+        # Dynamic Resource & Chunk auto-allocation targeting 50-70% surplus GPU VRAM & CPU
         from upframe.pipeline.resource_allocator import calculate_optimal_allocation
 
         total_frames = self.metadata.nb_frames
@@ -100,15 +103,21 @@ class PipelineScheduler:
             user_workers=self.workers,
             user_chunk_size=self.chunk_size,
             user_gpus=gpus,
+            user_batch_size=self.batch_size,
+            target_resource_ratio=self.target_resource_ratio,
             tta=self.tta
         )
         self.devices = alloc_devices
         self.chunk_size = alloc_chunk_size
+        self.batch_size = alloc_info.get("optimal_batch_size", 1)
         self.partitioner = ChunkPartitioner(chunk_size=self.chunk_size, overlap=1)
 
         logger.info(
             f"Resource allocation: {len(self.devices)} workers mapped to {self.devices} | "
+            f"Batch size: {self.batch_size} | "
             f"Chunk size: {self.chunk_size} frames (~{alloc_info['estimated_chunks']} chunks) | "
+            f"Target surplus ratio: {alloc_info.get('target_resource_ratio', 0.65)*100:.0f}% "
+            f"(Est {alloc_info.get('estimated_vram_gb', 0)}GB VRAM, {alloc_info.get('pct_free_vram_budget', 0)}% of free) | "
             f"Hardware: {', '.join(alloc_info['gpus_detected'])}"
         )
 
@@ -171,7 +180,8 @@ class PipelineScheduler:
                     ball_refine=self.ball_refine,
                     cadence_filter=self.cadence_filter,
                     anti_flicker=self.anti_flicker,
-                    scale=self.scale
+                    scale=self.scale,
+                    batch_size=self.batch_size
                 )
             )
 
@@ -190,6 +200,7 @@ class PipelineScheduler:
                 progress_callback(len(chunk_results) + 1, total_chunks)
 
         # Dispatch tasks to worker pool
+        from upframe.workers.pool import WorkerPool
         pool = WorkerPool(
             devices=self.devices,
             model_name=self.model_name,
@@ -199,7 +210,8 @@ class PipelineScheduler:
             ball_refine=self.ball_refine,
             cadence_filter=self.cadence_filter,
             anti_flicker=self.anti_flicker,
-            scale=self.scale
+            scale=self.scale,
+            batch_size=self.batch_size
         )
 
         executed_results = pool.execute(
