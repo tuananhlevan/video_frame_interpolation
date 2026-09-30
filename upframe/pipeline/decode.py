@@ -5,6 +5,7 @@ import os
 import subprocess
 from typing import Generator, List, Optional
 import numpy as np
+from upframe.utils.ffmpeg import find_binary
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,7 @@ class VideoDecoder:
         self.filepath = os.path.abspath(filepath)
         self.width = width
         self.height = height
-        self.ffmpeg_bin = ffmpeg_bin
+        self.ffmpeg_bin = find_binary(ffmpeg_bin)
         self.frame_bytes = width * height * 3
 
     def decode_chunk(

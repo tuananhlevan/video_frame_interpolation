@@ -164,8 +164,11 @@ class VideoEncoder:
         if frame.dtype != np.uint8:
             frame = (np.clip(frame, 0.0, 1.0) * 255.0).astype(np.uint8)
 
+        if not frame.flags["C_CONTIGUOUS"]:
+            frame = np.ascontiguousarray(frame)
+
         try:
-            self.proc.stdin.write(frame.tobytes())
+            self.proc.stdin.write(frame.data.cast("B"))
         except (BrokenPipeError, IOError, OSError) as e:
             stderr_msg = ""
             if self.proc.stderr:

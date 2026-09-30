@@ -45,3 +45,28 @@ def test_anti_flicker_cli_arg():
         "--anti-flicker"
     ])
     assert config.anti_flicker is True
+
+
+def test_anti_flicker_process_tensor_matches_numpy():
+    import torch
+    from upframe.utils.tensor import frames_to_tensor_batch, tensor_to_frames_batch
+
+    filter_mod = TemporalAntiFlicker(radius=3, margin=15, protect_ball=False)
+    np.random.seed(42)
+    f0 = np.random.randint(0, 256, (64, 64, 3), dtype=np.uint8)
+    f1 = np.random.randint(0, 256, (64, 64, 3), dtype=np.uint8)
+    f_inter = np.random.randint(0, 256, (64, 64, 3), dtype=np.uint8)
+
+    # CPU numpy baseline
+    cpu_cleaned = filter_mod.process(f0, f_inter, f1)
+
+    # Tensor vectorized process
+    dev = torch.device("cpu")
+    t0 = frames_to_tensor_batch([f0], dev)
+    t1 = frames_to_tensor_batch([f1], dev)
+    t_inter = frames_to_tensor_batch([f_inter], dev)
+
+    t_cleaned = filter_mod.process_tensor(t0, t_inter, t1)
+    tensor_cleaned = tensor_to_frames_batch(t_cleaned)[0]
+
+    np.testing.assert_array_equal(cpu_cleaned, tensor_cleaned)

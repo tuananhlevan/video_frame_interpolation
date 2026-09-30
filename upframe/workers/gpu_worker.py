@@ -144,7 +144,7 @@ class GPUWorker:
             # Generate 50 fps interleaved frames:
             # F[0], F_inter[0.5], F[1], F_inter[1.5], ..., F[N-1]
             if chunk_batch_size > 1:
-                from upframe.utils.tensor import frame_to_tensor, tensor_to_frame
+                from upframe.utils.tensor import frames_to_tensor_batch, tensor_to_frames_batch
                 import torch
 
                 i = 0
@@ -174,14 +174,8 @@ class GPUWorker:
                     if vfi_indices:
                         dev = getattr(self.model, "device", torch.device("cpu"))
                         half_mode = getattr(self.model, "half_precision", self.fp16)
-                        batch_a = torch.stack([
-                            frame_to_tensor(f, dev, half=half_mode).squeeze(0)
-                            for f in pairs_to_interpolate_a
-                        ])
-                        batch_b = torch.stack([
-                            frame_to_tensor(f, dev, half=half_mode).squeeze(0)
-                            for f in pairs_to_interpolate_b
-                        ])
+                        batch_a = frames_to_tensor_batch(pairs_to_interpolate_a, dev, half=half_mode)
+                        batch_b = frames_to_tensor_batch(pairs_to_interpolate_b, dev, half=half_mode)
 
                         if self.device_lock is not None:
                             with self.device_lock:
@@ -193,19 +187,15 @@ class GPUWorker:
                                 batch_a, batch_b, tta=self.tta, scale=scale_val
                             )
 
+                        if use_anti_flicker and self.temporal_anti_flicker is not None:
+                            pred_batch = self.temporal_anti_flicker.process_tensor(
+                                batch_a, pred_batch, batch_b
+                            )
+
                         del batch_a, batch_b
 
-                        pred_clean = (
-                            pred_batch.detach()
-                            .float()
-                            .nan_to_num(nan=0.0)
-                            .clamp(0.0, 1.0)
-                            .mul(255.0)
-                            .round()
-                            .to(torch.uint8)
-                        )
-                        pred_np_frames = pred_clean.permute(0, 2, 3, 1).cpu().numpy()
-                        del pred_batch, pred_clean
+                        pred_np_frames = tensor_to_frames_batch(pred_batch)
+                        del pred_batch
 
                         for k, local_idx in enumerate(vfi_indices):
                             inter_np = pred_np_frames[k]
@@ -214,8 +204,6 @@ class GPUWorker:
 
                             if use_ball_refine and self.ball_refiner is not None:
                                 inter_np = self.ball_refiner.refine(f_curr, inter_np, f_next, timestep=0.5)
-                            if use_anti_flicker and self.temporal_anti_flicker is not None:
-                                inter_np = self.temporal_anti_flicker.process(f_curr, inter_np, f_next)
                             results[local_idx] = inter_np
 
                     for j in range(i, end_i):

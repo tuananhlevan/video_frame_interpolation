@@ -25,6 +25,8 @@ class BallRefiner:
         self.min_motion_threshold = min_motion_threshold
         self.max_motion_threshold = max_motion_threshold
         self.blend_radius_mult = blend_radius_mult
+        self._last_f1: Optional[np.ndarray] = None
+        self._last_cands_1: Optional[list] = None
 
     def refine(
         self,
@@ -45,9 +47,15 @@ class BallRefiner:
         Returns:
             Refined frame_inter (same shape and dtype as input).
         """
-        # Fast candidate detection on F0 and F1
-        cands_0 = detect_ball_candidates(frame_0, min_circularity=0.45)
+        # Fast candidate detection on F0 and F1 with sequential cache
+        if self._last_f1 is frame_0 and self._last_cands_1 is not None:
+            cands_0 = list(self._last_cands_1)
+        else:
+            cands_0 = detect_ball_candidates(frame_0, min_circularity=0.45)
+
         cands_1 = detect_ball_candidates(frame_1, min_circularity=0.45)
+        self._last_f1 = frame_1
+        self._last_cands_1 = list(cands_1)
 
         if not cands_0 or not cands_1:
             return frame_inter

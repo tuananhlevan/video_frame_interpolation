@@ -33,6 +33,26 @@ def frame_to_tensor(
     return t
 
 
+def frames_to_tensor_batch(
+    frames: list,
+    device: torch.device,
+    half: bool = False
+) -> torch.Tensor:
+    """Bulk converts a list of (H, W, 3) uint8 NumPy frames to a (B, 3, H, W) PyTorch tensor [0, 1].
+
+    Performs a single contiguous host-to-device PCIe DMA transfer as uint8 (4x less PCIe bandwidth),
+    followed by in-GPU permutation, casting, and scaling directly on CUDA cores.
+    """
+    if not frames:
+        target_dtype = torch.float16 if half else torch.float32
+        return torch.empty((0, 3, 0, 0), device=device, dtype=target_dtype)
+
+    stacked = np.stack(frames, axis=0)
+    t = torch.from_numpy(stacked).to(device, non_blocking=True).permute(0, 3, 1, 2)
+    target_dtype = torch.float16 if half else torch.float32
+    return t.to(target_dtype).mul_(1.0 / 255.0)
+
+
 def tensor_to_frame(tensor: torch.Tensor) -> np.ndarray:
     """Converts a (1, 3, H, W) or (3, H, W) PyTorch tensor [0, 1] to a (H, W, 3) uint8 NumPy frame."""
     t = tensor.detach().cpu().float()
@@ -42,6 +62,23 @@ def tensor_to_frame(tensor: torch.Tensor) -> np.ndarray:
     frame = np.nan_to_num(frame, nan=0.0)
     frame = np.clip(frame, 0.0, 1.0) * 255.0
     return np.round(frame).astype(np.uint8)
+
+
+def tensor_to_frames_batch(tensor: torch.Tensor) -> np.ndarray:
+    """Bulk converts a (B, 3, H, W) PyTorch tensor [0, 1] to a (B, H, W, 3) uint8 NumPy array."""
+    return (
+        tensor.detach()
+        .float()
+        .nan_to_num(nan=0.0)
+        .clamp(0.0, 1.0)
+        .mul(255.0)
+        .round()
+        .to(torch.uint8)
+        .permute(0, 2, 3, 1)
+        .contiguous()
+        .cpu()
+        .numpy()
+    )
 
 
 def pad_to_multiple(
