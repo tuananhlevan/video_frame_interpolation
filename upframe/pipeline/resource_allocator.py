@@ -150,7 +150,11 @@ def calculate_optimal_allocation(
 
                 if model_vram_gb >= 5.0:
                     # Heavy models (e.g. AMT-G, EMA-VFI): worker-bound with batch_size=1
-                    max_w = min(6, max(1, int(usable_vram // model_vram_gb)))
+                    # Scale workers with VRAM capacity up to 14 workers on 80GB-96GB+ GPUs
+                    if gpu["total_vram_gb"] >= 80.0:
+                        max_w = min(14, max(1, int(usable_vram // model_vram_gb)))
+                    else:
+                        max_w = min(6, max(1, int(usable_vram // model_vram_gb)))
                     optimal_batch_size = user_batch_size or 1
                     cost_per_w = model_vram_gb
                     total_est_vram_gb += max_w * cost_per_w
@@ -162,17 +166,26 @@ def calculate_optimal_allocation(
                     base_overhead = 1.0
 
                     # Worker count per GPU: scaled to GPU tier and CPU cores
-                    if gpu["total_vram_gb"] >= 40.0 and model_key in ("rife", "auto"):
+                    if gpu["total_vram_gb"] >= 80.0:
+                        # 80GB - 96GB+ GPUs (RTX 6000 Blackwell, H100, A100 80GB)
+                        target_w = max(10, int(usable_vram // 7.0))
+                    elif gpu["total_vram_gb"] >= 40.0:
+                        # 40GB - 48GB GPUs (A100 40GB, L40S)
                         target_w = max(6, int(usable_vram // 6.0))
                     elif gpu["total_vram_gb"] >= 16.0:
+                        # 16GB - 24GB GPUs (RTX 5060 Ti, 3090, 4090)
                         target_w = max(4, int(usable_vram // (model_vram_gb * 2.5)))
                     else:
                         target_w = max(2, int(usable_vram // (model_vram_gb * 2.5)))
-                    max_w = max(1, min(max_w_per_gpu_cpu, min(6, target_w)))
-                    if gpu["total_vram_gb"] >= 16.0 and model_key == "rife":
-                        max_w = max(4, max_w)
-                    if gpu["total_vram_gb"] >= 40.0 and model_key == "rife":
-                        max_w = max(6, max_w)
+
+                    max_w = max(1, min(max_w_per_gpu_cpu, target_w))
+                    # Ensure minimum worker saturation per GPU tier if CPU cores permit
+                    if gpu["total_vram_gb"] >= 80.0 and model_key in ("rife", "auto"):
+                        max_w = max(10, min(max_cpu_workers, max_w))
+                    elif gpu["total_vram_gb"] >= 40.0 and model_key in ("rife", "auto"):
+                        max_w = max(6, min(max_cpu_workers, max_w))
+                    elif gpu["total_vram_gb"] >= 16.0 and model_key in ("rife", "auto"):
+                        max_w = max(4, min(max_cpu_workers, max_w))
 
                     if user_batch_size is not None and user_batch_size > 0:
                         optimal_batch_size = user_batch_size
@@ -182,14 +195,19 @@ def calculate_optimal_allocation(
                         fixed_overhead = base_overhead + max_w * weight_footprint
                         surplus = max(0.5, budget_vram - fixed_overhead)
                         raw_b = int(surplus / vram_per_pair)
-                        if raw_b >= 16:
-                            b = (raw_b // 4) * 4
-                        elif raw_b >= 4:
-                            b = (raw_b // 2) * 2
+                        
+                        # Max batch cap dynamically ensures at least 25% free headroom on any GPU size
+                        max_batch_cap = max(1, int((free_vram * 0.70 - fixed_overhead) / vram_per_pair))
+                        b = min(raw_b, max_batch_cap)
+                        if b >= 32:
+                            b = (b // 8) * 8
+                        elif b >= 16:
+                            b = (b // 4) * 4
+                        elif b >= 4:
+                            b = (b // 2) * 2
                         else:
-                            b = max(1, raw_b)
-                        # Cap batch to 28 frames to prevent PCIe transfer stalls and avoid OOM
-                        optimal_batch_size = max(1, min(28, b))
+                            b = max(1, b)
+                        optimal_batch_size = max(1, b)
 
                     # Real peak allocated/reserved VRAM on this GPU
                     gpu_est_vram = min(free_vram, base_overhead + max_w * weight_footprint + optimal_batch_size * vram_per_pair)
