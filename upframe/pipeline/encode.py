@@ -5,7 +5,7 @@ import os
 import subprocess
 from typing import Optional
 import numpy as np
-from upframe.utils.ffmpeg import find_binary, is_nvenc_available
+from upframe.utils.ffmpeg import find_binary, is_nvenc_available, check_nvenc_support
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +46,15 @@ class VideoEncoder:
         self.color_range = color_range
 
         if use_nvenc is True:
-            if not is_nvenc_available(self.ffmpeg_bin):
+            is_avail, reason = check_nvenc_support(self.ffmpeg_bin)
+            if not is_avail:
+                hint = ""
+                r_lower = reason.lower()
+                if "no nvenc capable devices found" in r_lower or "no device" in r_lower:
+                    hint = " (Hardware note: NVIDIA A100/H100 data center GPUs have 0 NVENC hardware encoder chips; only T4/L4/A10/RTX have NVENC)"
                 logger.warning(
-                    f"NVIDIA NVENC requested, but 'h264_nvenc' is not supported by '{self.ffmpeg_bin}'. "
-                    "Falling back to software encoder (libx264)."
+                    f"NVIDIA NVENC requested, but 'h264_nvenc' cannot be initialized on '{self.ffmpeg_bin}' "
+                    f"[{reason}]{hint}. Falling back to software encoder (libx264)."
                 )
                 self.use_nvenc = False
             else:

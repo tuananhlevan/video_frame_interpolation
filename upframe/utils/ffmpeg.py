@@ -8,8 +8,8 @@ from typing import Optional
 
 
 @functools.lru_cache(maxsize=16)
-def _test_nvenc(resolved_bin: str) -> bool:
-    """Tests if a specific ffmpeg binary can encode with h264_nvenc."""
+def _test_nvenc_detail(resolved_bin: str) -> tuple:
+    """Tests if a specific ffmpeg binary can encode with h264_nvenc on current GPU hardware."""
     try:
         proc = subprocess.run(
             [
@@ -24,11 +24,25 @@ def _test_nvenc(resolved_bin: str) -> bool:
             ],
             capture_output=True,
             text=True,
-            timeout=3
+            timeout=6
         )
-        return proc.returncode == 0
-    except Exception:
-        return False
+        if proc.returncode == 0:
+            return True, ""
+        err_msg = proc.stderr.strip() if proc.stderr else f"exit code {proc.returncode}"
+        return False, err_msg
+    except Exception as e:
+        return False, str(e)
+
+
+def _test_nvenc(resolved_bin: str) -> bool:
+    ok, _ = _test_nvenc_detail(resolved_bin)
+    return ok
+
+
+def check_nvenc_support(ffmpeg_bin: str = "ffmpeg") -> tuple:
+    """Returns (is_available, error_reason) for NVENC hardware encoding."""
+    resolved = find_binary(ffmpeg_bin, prefer_nvenc=True)
+    return _test_nvenc_detail(resolved)
 
 
 def find_binary(binary_name: str, prefer_nvenc: bool = False) -> str:
