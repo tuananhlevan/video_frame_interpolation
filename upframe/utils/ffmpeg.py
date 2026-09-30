@@ -16,15 +16,17 @@ def _test_nvenc_detail(resolved_bin: str) -> tuple:
                 resolved_bin,
                 "-v", "error",
                 "-f", "lavfi",
-                "-i", "color=s=64x64",
+                "-i", "color=s=256x256",
+                "-pix_fmt", "yuv420p",
                 "-c:v", "h264_nvenc",
-                "-frames:v", "1",
+                "-bf", "0",
+                "-frames:v", "2",
                 "-f", "null",
                 "-"
             ],
             capture_output=True,
             text=True,
-            timeout=6
+            timeout=10
         )
         if proc.returncode == 0:
             return True, ""
