@@ -4,7 +4,9 @@
 
 *.pkl
 output/*
-train_log/*
+train_log/*.pkl
+train_log/*.pth
+train_log/__pycache__/
 *.mp4
 
 tests/

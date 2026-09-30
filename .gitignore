@@ -27,7 +27,9 @@ backbones/interpany_checkpoints/
 backbones/ifrnet/checkpoints/
 backbones/amt/ckpt/
 backbones/ema_vfi/ckpt/
-backbones/rife/train_log/
+backbones/rife/train_log/*.pkl
+backbones/rife/train_log/*.pth
+backbones/rife/train_log/__pycache__/
 backbones/interpany/
 weights/*
 !weights/.gitkeep

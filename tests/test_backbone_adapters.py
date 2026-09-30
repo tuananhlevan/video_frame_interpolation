@@ -181,3 +181,27 @@ def test_bwdif_adapter(device, mname):
     assert not model.is_loaded
 
 
+@pytest.mark.parametrize("fp16", [False, True])
+def test_rife_adapter(device, fp16):
+    """Test RIFE model loading and interpolation with auto-detected architecture."""
+    import upframe.models.rife  # noqa: F401
+
+    model_cls = ModelRegistry.get("rife")
+    assert model_cls is not None
+
+    model = model_cls()
+    model.load(device=device, fp16=fp16)
+    assert model.is_loaded
+
+    h, w = 128, 128
+    frame_a = np.zeros((h, w, 3), dtype=np.uint8)
+    frame_b = np.full((h, w, 3), 255, dtype=np.uint8)
+
+    interp = model.interpolate(frame_a, frame_b)
+    assert interp.shape == (h, w, 3)
+    assert interp.dtype == np.uint8
+
+    model.unload()
+    assert model.net is None
+
+
