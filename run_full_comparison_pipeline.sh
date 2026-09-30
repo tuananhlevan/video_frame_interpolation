@@ -1,23 +1,17 @@
 #!/usr/bin/env bash
 set -e
 
-# Dynamically resolve script directory (repository root)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
-
-# Allow custom python binary via $PYTHON, default to active python3 or python
-if [ -z "$PYTHON" ]; then
-    if command -v python3 &>/dev/null; then
-        PYTHON="python3"
-    elif command -v python &>/dev/null; then
-        PYTHON="python"
-    else
-        echo "Error: Python binary not found in PATH. Please install Python or set PYTHON=/path/to/python"
-        exit 1
-    fi
+# Use installed 'upframe' CLI command directly (configured via pyproject.toml: [project.scripts])
+# Fall back to python module execution if 'upframe' is not yet in PATH
+if command -v upframe &>/dev/null; then
+    UPFRAME="upframe"
+elif command -v python3 &>/dev/null; then
+    UPFRAME="python3 -m upframe.cli.upframe"
+else
+    UPFRAME="python -m upframe.cli.upframe"
 fi
 
-# Input video argument (defaults to highlight_test.mp4 in repository root)
+# Input video argument (defaults to highlight_test.mp4)
 INPUT="${1:-highlight_test.mp4}"
 
 if [ ! -f "$INPUT" ]; then
@@ -30,9 +24,8 @@ INPUT_STEM="$(basename "$INPUT" | sed 's/\.[^.]*$//')"
 
 echo "=========================================================="
 echo "Starting Full Sequential VFI Pipeline with Anti-Flicker"
-echo "Repository Root: $SCRIPT_DIR"
-echo "Python Executable: $($PYTHON -c 'import sys; print(sys.executable)')"
-echo "Input: $INPUT"
+echo "CLI Command: $UPFRAME"
+echo "Input Video: $INPUT"
 echo "Sequence: 1) RIFE  ->  2) AMT-G  ->  3) EMA-VFI + TTA"
 echo "Start time: $(date)"
 echo "=========================================================="
@@ -40,7 +33,7 @@ echo "=========================================================="
 # 1. RIFE
 echo ""
 echo "[Step 1/3] Running RIFE with ball-refine, cadence-filter, anti-flicker..."
-"$PYTHON" -m upframe.cli.upframe "$INPUT" "${INPUT_STEM}_rife_antiflicker.mp4" \
+$UPFRAME "$INPUT" "${INPUT_STEM}_rife_antiflicker.mp4" \
     --model rife \
     --ball-refine \
     --cadence-filter \
@@ -52,7 +45,7 @@ echo "[Step 1/3] RIFE completed successfully at $(date)!"
 # 2. AMT-G
 echo ""
 echo "[Step 2/3] Running AMT-G with ball-refine, cadence-filter, anti-flicker..."
-"$PYTHON" -m upframe.cli.upframe "$INPUT" "${INPUT_STEM}_amtg_antiflicker.mp4" \
+$UPFRAME "$INPUT" "${INPUT_STEM}_amtg_antiflicker.mp4" \
     --model amt-g \
     --ball-refine \
     --cadence-filter \
@@ -64,7 +57,7 @@ echo "[Step 2/3] AMT-G completed successfully at $(date)!"
 # 3. EMA-VFI + TTA
 echo ""
 echo "[Step 3/3] Running EMA-VFI with TTA, ball-refine, cadence-filter, anti-flicker..."
-"$PYTHON" -m upframe.cli.upframe "$INPUT" "${INPUT_STEM}_emavfi_tta_antiflicker.mp4" \
+$UPFRAME "$INPUT" "${INPUT_STEM}_emavfi_tta_antiflicker.mp4" \
     --model ema-vfi \
     --tta \
     --ball-refine \
