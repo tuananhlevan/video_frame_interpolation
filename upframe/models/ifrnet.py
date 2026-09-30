@@ -7,7 +7,7 @@ from typing import Any, Optional, Union
 import numpy as np
 import torch
 from upframe.models.base import BaseVFIModel, ModelRegistry
-from upframe.models.weights import resolve_checkpoint
+from upframe.models.weights import PROJECT_ROOT, resolve_checkpoint
 from upframe.utils.tensor import (
     frame_to_tensor,
     tensor_to_frame,
@@ -38,7 +38,8 @@ class IFRNetModel(BaseVFIModel):
         else:
             self.device = torch.device(device)
 
-        ifrnet_dir = os.path.abspath("backbones/ifrnet") if os.path.exists("backbones/ifrnet") else os.path.abspath("ifrnet")
+        backbone_ifrnet = os.path.join(PROJECT_ROOT, "backbones", "ifrnet")
+        ifrnet_dir = backbone_ifrnet if os.path.exists(backbone_ifrnet) else (os.path.abspath("backbones/ifrnet") if os.path.exists("backbones/ifrnet") else os.path.abspath("ifrnet"))
         if ifrnet_dir not in sys.path:
             sys.path.insert(0, ifrnet_dir)
 

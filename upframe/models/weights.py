@@ -11,19 +11,40 @@ from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
-CACHE_DIR = os.path.expanduser("~/.cache/upframe")
+# Project root directory (the repository root containing upframe/, backbones/, weights/)
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+# Canonical directory for model weights inside this project folder
+# Can be overridden by UPFRAME_WEIGHTS_DIR environment variable
+WEIGHTS_DIR = os.environ.get("UPFRAME_WEIGHTS_DIR", os.path.join(PROJECT_ROOT, "weights"))
+
+# Cache directory (defaults to WEIGHTS_DIR for self-contained, OS-agnostic portability)
+CACHE_DIR = WEIGHTS_DIR
+USER_CACHE_DIR = os.path.expanduser("~/.cache/upframe")
 
 MODEL_WEIGHT_CANDIDATES: Dict[str, List[str]] = {
     "rife": [
+        os.path.join(WEIGHTS_DIR, "rife", "flownet.pkl"),
+        os.path.join(WEIGHTS_DIR, "flownet.pkl"),
+        os.path.join(PROJECT_ROOT, "backbones", "rife", "train_log", "flownet.pkl"),
+        os.path.join(PROJECT_ROOT, "backbones", "rife", "flownet.pkl"),
         "backbones/rife/train_log/flownet.pkl",
         "backbones/rife/flownet.pkl",
         "rife/train_log/flownet.pkl",
         "rife/flownet.pkl",
         "train_log/flownet.pkl",
         "weights/rife.pth",
-        os.path.join(CACHE_DIR, "rife", "flownet.pkl"),
+        os.path.join(USER_CACHE_DIR, "rife", "flownet.pkl"),
     ],
     "amt": [
+        os.path.join(WEIGHTS_DIR, "amt", "amt-g.pth"),
+        os.path.join(WEIGHTS_DIR, "amt", "amt-s.pth"),
+        os.path.join(WEIGHTS_DIR, "amt", "amt-l.pth"),
+        os.path.join(PROJECT_ROOT, "backbones", "amt", "ckpt", "amt-g.pth"),
+        os.path.join(PROJECT_ROOT, "backbones", "amt", "ckpt", "amt-s.pth"),
+        os.path.join(PROJECT_ROOT, "backbones", "amt", "ckpt", "amt-l.pth"),
+        os.path.join(PROJECT_ROOT, "backbones", "amt", "pretrained", "amt-g.pth"),
+        os.path.join(PROJECT_ROOT, "backbones", "amt", "pretrained", "amt-s.pth"),
         "backbones/amt/ckpt/amt-g.pth",
         "backbones/amt/ckpt/amt-s.pth",
         "backbones/amt/ckpt/amt-l.pth",
@@ -39,10 +60,13 @@ MODEL_WEIGHT_CANDIDATES: Dict[str, List[str]] = {
         "pretrained/amt-s.pth",
         "weights/amt-g.pth",
         "weights/amt-s.pth",
-        os.path.join(CACHE_DIR, "amt", "amt-g.pth"),
-        os.path.join(CACHE_DIR, "amt", "amt-s.pth"),
+        os.path.join(USER_CACHE_DIR, "amt", "amt-g.pth"),
+        os.path.join(USER_CACHE_DIR, "amt", "amt-s.pth"),
     ],
     "amt-s": [
+        os.path.join(WEIGHTS_DIR, "amt", "amt-s.pth"),
+        os.path.join(PROJECT_ROOT, "backbones", "amt", "ckpt", "amt-s.pth"),
+        os.path.join(PROJECT_ROOT, "backbones", "amt", "pretrained", "amt-s.pth"),
         "backbones/amt/ckpt/amt-s.pth",
         "backbones/amt/pretrained/amt-s.pth",
         "amt/ckpt/amt-s.pth",
@@ -50,9 +74,12 @@ MODEL_WEIGHT_CANDIDATES: Dict[str, List[str]] = {
         "ckpt/amt-s.pth",
         "pretrained/amt-s.pth",
         "weights/amt-s.pth",
-        os.path.join(CACHE_DIR, "amt", "amt-s.pth"),
+        os.path.join(USER_CACHE_DIR, "amt", "amt-s.pth"),
     ],
     "amt-l": [
+        os.path.join(WEIGHTS_DIR, "amt", "amt-l.pth"),
+        os.path.join(PROJECT_ROOT, "backbones", "amt", "ckpt", "amt-l.pth"),
+        os.path.join(PROJECT_ROOT, "backbones", "amt", "pretrained", "amt-l.pth"),
         "backbones/amt/ckpt/amt-l.pth",
         "backbones/amt/pretrained/amt-l.pth",
         "amt/ckpt/amt-l.pth",
@@ -60,9 +87,12 @@ MODEL_WEIGHT_CANDIDATES: Dict[str, List[str]] = {
         "ckpt/amt-l.pth",
         "pretrained/amt-l.pth",
         "weights/amt-l.pth",
-        os.path.join(CACHE_DIR, "amt", "amt-l.pth"),
+        os.path.join(USER_CACHE_DIR, "amt", "amt-l.pth"),
     ],
     "amt-g": [
+        os.path.join(WEIGHTS_DIR, "amt", "amt-g.pth"),
+        os.path.join(PROJECT_ROOT, "backbones", "amt", "ckpt", "amt-g.pth"),
+        os.path.join(PROJECT_ROOT, "backbones", "amt", "pretrained", "amt-g.pth"),
         "backbones/amt/ckpt/amt-g.pth",
         "backbones/amt/pretrained/amt-g.pth",
         "amt/ckpt/amt-g.pth",
@@ -70,70 +100,92 @@ MODEL_WEIGHT_CANDIDATES: Dict[str, List[str]] = {
         "ckpt/amt-g.pth",
         "pretrained/amt-g.pth",
         "weights/amt-g.pth",
-        os.path.join(CACHE_DIR, "amt", "amt-g.pth"),
+        os.path.join(USER_CACHE_DIR, "amt", "amt-g.pth"),
     ],
     "ifrnet": [
+        os.path.join(WEIGHTS_DIR, "ifrnet", "IFRNet_Vimeo90K.pth"),
+        os.path.join(WEIGHTS_DIR, "ifrnet", "IFRNet_GoPro.pth"),
+        os.path.join(PROJECT_ROOT, "backbones", "ifrnet", "checkpoints", "IFRNet", "IFRNet_Vimeo90K.pth"),
+        os.path.join(PROJECT_ROOT, "backbones", "ifrnet", "checkpoints", "IFRNet", "IFRNet_GoPro.pth"),
         "backbones/ifrnet/checkpoints/IFRNet/IFRNet_Vimeo90K.pth",
         "backbones/ifrnet/checkpoints/IFRNet/IFRNet_GoPro.pth",
         "ifrnet/checkpoints/IFRNet/IFRNet_Vimeo90K.pth",
         "checkpoints/IFRNet/IFRNet_Vimeo90K.pth",
-        os.path.join(CACHE_DIR, "ifrnet", "IFRNet_Vimeo90K.pth"),
+        os.path.join(USER_CACHE_DIR, "ifrnet", "IFRNet_Vimeo90K.pth"),
     ],
     "ifrnet-gopro": [
+        os.path.join(WEIGHTS_DIR, "ifrnet", "IFRNet_GoPro.pth"),
+        os.path.join(PROJECT_ROOT, "backbones", "ifrnet", "checkpoints", "IFRNet", "IFRNet_GoPro.pth"),
         "backbones/ifrnet/checkpoints/IFRNet/IFRNet_GoPro.pth",
         "ifrnet/checkpoints/IFRNet/IFRNet_GoPro.pth",
         "checkpoints/IFRNet/IFRNet_GoPro.pth",
-        os.path.join(CACHE_DIR, "ifrnet", "IFRNet_GoPro.pth"),
+        os.path.join(USER_CACHE_DIR, "ifrnet", "IFRNet_GoPro.pth"),
     ],
     "film": [
+        os.path.join(WEIGHTS_DIR, "film", "saved_model"),
+        os.path.join(PROJECT_ROOT, "backbones", "film", "pretrained_models", "film_net", "Style", "saved_model"),
         "backbones/film/pretrained_models/film_net/Style/saved_model",
         "film/pretrained_models/film_net/Style/saved_model",
         "pretrained_models/film_net/Style/saved_model",
-        os.path.join(CACHE_DIR, "film", "saved_model"),
+        os.path.join(USER_CACHE_DIR, "film", "saved_model"),
     ],
     # GMFSS Fortuna — checkpoint is a *directory* containing 4 pkl files
     "gmfss": [
+        os.path.join(WEIGHTS_DIR, "gmfss", "train_log"),
+        os.path.join(PROJECT_ROOT, "backbones", "gmfss", "train_log"),
         "backbones/gmfss/train_log",
         "gmfss/train_log",
         "train_log",
-        os.path.join(CACHE_DIR, "gmfss", "train_log"),
+        os.path.join(USER_CACHE_DIR, "gmfss", "train_log"),
     ],
     # EMA-VFI (large)
     "ema-vfi": [
+        os.path.join(WEIGHTS_DIR, "ema_vfi", "ours.pkl"),
+        os.path.join(PROJECT_ROOT, "backbones", "ema_vfi", "ckpt", "ours.pkl"),
+        os.path.join(PROJECT_ROOT, "backbones", "ema_vfi", "ckpt", "ema-vfi-l.pkl"),
         "backbones/ema_vfi/ckpt/ours.pkl",
         "backbones/ema_vfi/ckpt/ema-vfi-l.pkl",
         "ema_vfi/ckpt/ours.pkl",
         "ckpt/ours.pkl",
-        os.path.join(CACHE_DIR, "ema_vfi", "ours.pkl"),
+        os.path.join(USER_CACHE_DIR, "ema_vfi", "ours.pkl"),
     ],
     # EMA-VFI (small)
     "ema-vfi-s": [
+        os.path.join(WEIGHTS_DIR, "ema_vfi", "ours_small.pkl"),
+        os.path.join(PROJECT_ROOT, "backbones", "ema_vfi", "ckpt", "ours_small.pkl"),
+        os.path.join(PROJECT_ROOT, "backbones", "ema_vfi", "ckpt", "ema-vfi-s.pkl"),
         "backbones/ema_vfi/ckpt/ours_small.pkl",
         "backbones/ema_vfi/ckpt/ema-vfi-s.pkl",
         "ema_vfi/ckpt/ours_small.pkl",
         "ckpt/ours_small.pkl",
-        os.path.join(CACHE_DIR, "ema_vfi", "ours_small.pkl"),
+        os.path.join(USER_CACHE_DIR, "ema_vfi", "ours_small.pkl"),
     ],
     "interpany": [
+        os.path.join(WEIGHTS_DIR, "interpany", "DR-RIFE-vgg", "train_sdi_log", "flownet_sdi.pkl"),
+        os.path.join(PROJECT_ROOT, "backbones", "interpany_checkpoints", "DR-RIFE-vgg", "train_sdi_log", "flownet_sdi.pkl"),
         "backbones/interpany_checkpoints/DR-RIFE-vgg/train_sdi_log/flownet_sdi.pkl",
         "backbones/interpany_checkpoints/DR-RIFE-vgg/train_sdi_log",
         "backbones/interpany_checkpoints/DR-RIFE-vgg",
-        os.path.join(CACHE_DIR, "interpany", "DR-RIFE-vgg", "train_sdi_log", "flownet_sdi.pkl"),
-        os.path.join(CACHE_DIR, "interpany", "DR-RIFE-vgg"),
+        os.path.join(USER_CACHE_DIR, "interpany", "DR-RIFE-vgg", "train_sdi_log", "flownet_sdi.pkl"),
+        os.path.join(USER_CACHE_DIR, "interpany", "DR-RIFE-vgg"),
     ],
     "interpany-vgg": [
+        os.path.join(WEIGHTS_DIR, "interpany", "DR-RIFE-vgg", "train_sdi_log", "flownet_sdi.pkl"),
+        os.path.join(PROJECT_ROOT, "backbones", "interpany_checkpoints", "DR-RIFE-vgg", "train_sdi_log", "flownet_sdi.pkl"),
         "backbones/interpany_checkpoints/DR-RIFE-vgg/train_sdi_log/flownet_sdi.pkl",
         "backbones/interpany_checkpoints/DR-RIFE-vgg/train_sdi_log",
         "backbones/interpany_checkpoints/DR-RIFE-vgg",
-        os.path.join(CACHE_DIR, "interpany", "DR-RIFE-vgg", "train_sdi_log", "flownet_sdi.pkl"),
-        os.path.join(CACHE_DIR, "interpany", "DR-RIFE-vgg"),
+        os.path.join(USER_CACHE_DIR, "interpany", "DR-RIFE-vgg", "train_sdi_log", "flownet_sdi.pkl"),
+        os.path.join(USER_CACHE_DIR, "interpany", "DR-RIFE-vgg"),
     ],
     "interpany-pro": [
+        os.path.join(WEIGHTS_DIR, "interpany", "DR-RIFE-pro", "train_sdi_log", "flownet_sdi.pkl"),
+        os.path.join(PROJECT_ROOT, "backbones", "interpany_checkpoints", "DR-RIFE-pro", "train_sdi_log", "flownet_sdi.pkl"),
         "backbones/interpany_checkpoints/DR-RIFE-pro/train_sdi_log/flownet_sdi.pkl",
         "backbones/interpany_checkpoints/DR-RIFE-pro/train_sdi_log",
         "backbones/interpany_checkpoints/DR-RIFE-pro",
-        os.path.join(CACHE_DIR, "interpany", "DR-RIFE-pro", "train_sdi_log", "flownet_sdi.pkl"),
-        os.path.join(CACHE_DIR, "interpany", "DR-RIFE-pro"),
+        os.path.join(USER_CACHE_DIR, "interpany", "DR-RIFE-pro", "train_sdi_log", "flownet_sdi.pkl"),
+        os.path.join(USER_CACHE_DIR, "interpany", "DR-RIFE-pro"),
     ],
 }
 

@@ -22,6 +22,7 @@ class WorkerPool:
         tta: bool = False,
         ball_refine: bool = False,
         cadence_filter: bool = False,
+        anti_flicker: bool = False,
         scale: float = 1.0
     ) -> None:
         self.devices = devices or ["cpu"]
@@ -31,6 +32,7 @@ class WorkerPool:
         self.tta = tta
         self.ball_refine = ball_refine
         self.cadence_filter = cadence_filter
+        self.anti_flicker = anti_flicker
         self.scale = scale
         self.workers: Dict[int, GPUWorker] = {}
         self._initialize_workers()
@@ -45,6 +47,7 @@ class WorkerPool:
                 tta=self.tta,
                 ball_refine=self.ball_refine,
                 cadence_filter=self.cadence_filter,
+                anti_flicker=self.anti_flicker,
                 scale=self.scale
             )
             worker.initialize()

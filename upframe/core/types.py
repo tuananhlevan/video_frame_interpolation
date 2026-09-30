@@ -96,6 +96,8 @@ class ChunkTask:
     ball_refine: bool = False
     cadence_filter: bool = False
     scale: float = 1.0
+    anti_flicker: bool = False
+
 
 
 @dataclass

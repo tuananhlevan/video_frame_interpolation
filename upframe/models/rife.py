@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from upframe.models.base import BaseVFIModel, ModelRegistry
-from upframe.models.weights import resolve_checkpoint
+from upframe.models.weights import PROJECT_ROOT, resolve_checkpoint
 from upframe.utils.tensor import (
     frame_to_tensor,
     tensor_to_frame,
@@ -127,7 +127,8 @@ class RIFEModel(BaseVFIModel):
             self.device = torch.device(device)
 
         resolved_path = resolve_checkpoint("rife", checkpoint_path)
-        rife_dir = os.path.abspath("backbones/rife") if os.path.exists("backbones/rife") else os.path.abspath("rife")
+        backbone_rife = os.path.join(PROJECT_ROOT, "backbones", "rife")
+        rife_dir = backbone_rife if os.path.exists(backbone_rife) else (os.path.abspath("backbones/rife") if os.path.exists("backbones/rife") else os.path.abspath("rife"))
 
         loaded = False
         if resolved_path:

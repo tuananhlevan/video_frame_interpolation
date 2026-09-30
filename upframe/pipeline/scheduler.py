@@ -45,6 +45,7 @@ class PipelineScheduler:
         deinterlace: str = "auto",
         ball_refine: bool = False,
         cadence_filter: bool = False,
+        anti_flicker: bool = False,
         scale: float = 1.0
     ) -> None:
         self.metadata = metadata
@@ -65,6 +66,7 @@ class PipelineScheduler:
         self.deinterlace = deinterlace
         self.ball_refine = ball_refine
         self.cadence_filter = cadence_filter
+        self.anti_flicker = anti_flicker
         self.scale = scale
 
         output_stem = os.path.splitext(os.path.basename(self.output_filepath))[0]
@@ -168,6 +170,7 @@ class PipelineScheduler:
                     color_range=self.metadata.color_range,
                     ball_refine=self.ball_refine,
                     cadence_filter=self.cadence_filter,
+                    anti_flicker=self.anti_flicker,
                     scale=self.scale
                 )
             )
@@ -195,6 +198,7 @@ class PipelineScheduler:
             tta=self.tta,
             ball_refine=self.ball_refine,
             cadence_filter=self.cadence_filter,
+            anti_flicker=self.anti_flicker,
             scale=self.scale
         )
 

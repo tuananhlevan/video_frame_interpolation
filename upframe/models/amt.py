@@ -7,7 +7,7 @@ from typing import Any, Optional, Union
 import numpy as np
 import torch
 from upframe.models.base import BaseVFIModel, ModelRegistry
-from upframe.models.weights import resolve_checkpoint
+from upframe.models.weights import PROJECT_ROOT, resolve_checkpoint
 from upframe.utils.tensor import (
     frame_to_tensor,
     tensor_to_frame,
@@ -44,7 +44,8 @@ class AMTModel(BaseVFIModel):
         self.niters = niters
         self.half_precision = fp16 and (self.device.type == "cuda")
 
-        amt_dir = os.path.abspath("backbones/amt") if os.path.exists("backbones/amt") else os.path.abspath("amt")
+        backbone_amt = os.path.join(PROJECT_ROOT, "backbones", "amt")
+        amt_dir = backbone_amt if os.path.exists(backbone_amt) else (os.path.abspath("backbones/amt") if os.path.exists("backbones/amt") else os.path.abspath("amt"))
         # Evict other backbones from sys.path and prioritize AMT
         sys.path = [p for p in sys.path if not any(p.endswith(os.path.join("backbones", b)) for b in ("gmfss", "ema_vfi", "rife", "film", "ifrnet"))]
         if amt_dir in sys.path:

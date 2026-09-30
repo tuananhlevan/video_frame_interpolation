@@ -29,7 +29,8 @@ def test_multi_gpu_allocation_3x_l40s():
         {'index': 1, 'name': 'NVIDIA L40S', 'total_vram_gb': 48.0, 'free_vram_gb': 46.0},
         {'index': 2, 'name': 'NVIDIA L40S', 'total_vram_gb': 48.0, 'free_vram_gb': 46.0},
     ]
-    with patch.object(resource_allocator, 'get_gpu_info', return_value=mock_3x_l40s):
+    with patch.object(resource_allocator, 'get_gpu_info', return_value=mock_3x_l40s), \
+         patch.object(resource_allocator, 'get_system_ram_gb', return_value=128.0):
         # AMT-G: 48GB / 12.5GB = 3 workers per GPU * 3 GPUs = 9 workers
         devs_amt, csize_amt, info_amt = resource_allocator.calculate_optimal_allocation("amt-g", total_frames=135000)
         assert len(devs_amt) == 9

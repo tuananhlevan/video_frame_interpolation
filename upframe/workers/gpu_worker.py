@@ -7,6 +7,7 @@ from typing import List, Optional
 import numpy as np
 from upframe.core.types import ChunkResult, ChunkTask
 from upframe.models.base import BaseVFIModel, ModelRegistry
+from upframe.pipeline.anti_flicker import TemporalAntiFlicker
 from upframe.pipeline.ball_refiner import BallRefiner
 from upframe.pipeline.cadence import is_duplicate_frame
 from upframe.pipeline.decode import VideoDecoder
@@ -28,6 +29,7 @@ class GPUWorker:
         tta: bool = False,
         ball_refine: bool = False,
         cadence_filter: bool = False,
+        anti_flicker: bool = False,
         scale: float = 1.0
     ) -> None:
         self.device = device
@@ -37,9 +39,11 @@ class GPUWorker:
         self.tta = tta
         self.ball_refine = ball_refine
         self.cadence_filter = cadence_filter
+        self.anti_flicker = anti_flicker
         self.scale = scale
         self.model: Optional[BaseVFIModel] = None
         self.ball_refiner: Optional[BallRefiner] = BallRefiner() if ball_refine else None
+        self.temporal_anti_flicker: Optional[TemporalAntiFlicker] = TemporalAntiFlicker() if anti_flicker else None
 
     def initialize(self) -> None:
         """Initializes model on worker's device."""
@@ -121,10 +125,13 @@ class GPUWorker:
 
             use_cadence = getattr(task, "cadence_filter", False) or self.cadence_filter
             use_ball_refine = getattr(task, "ball_refine", False) or self.ball_refine
+            use_anti_flicker = getattr(task, "anti_flicker", False) or self.anti_flicker
             scale_val = getattr(task, "scale", 1.0) or self.scale
 
             if use_ball_refine and self.ball_refiner is None:
                 self.ball_refiner = BallRefiner()
+            if use_anti_flicker and self.temporal_anti_flicker is None:
+                self.temporal_anti_flicker = TemporalAntiFlicker()
 
             # Generate 50 fps interleaved frames:
             # F[0], F_inter[0.5], F[1], F_inter[1.5], ..., F[N-1]
@@ -149,6 +156,8 @@ class GPUWorker:
                     inter = self.model.interpolate(f_curr, f_next, tta=self.tta, scale=scale_val)
                     if use_ball_refine and self.ball_refiner is not None:
                         inter = self.ball_refiner.refine(f_curr, inter, f_next, timestep=0.5)
+                    if use_anti_flicker and self.temporal_anti_flicker is not None:
+                        inter = self.temporal_anti_flicker.process(f_curr, inter, f_next)
                     encoder.write_frame(inter)
                 
                 total_output_frames += 1
@@ -198,6 +207,7 @@ def worker_process_entrypoint(
         tta=getattr(task, "tta", False),
         ball_refine=getattr(task, "ball_refine", False),
         cadence_filter=getattr(task, "cadence_filter", False),
+        anti_flicker=getattr(task, "anti_flicker", False),
         scale=getattr(task, "scale", 1.0),
     )
     return worker.process_chunk(task)

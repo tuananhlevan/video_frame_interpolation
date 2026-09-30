@@ -7,7 +7,7 @@ from typing import Any, Optional, Union
 import numpy as np
 import torch
 from upframe.models.base import BaseVFIModel, ModelRegistry
-from upframe.models.weights import resolve_checkpoint
+from upframe.models.weights import PROJECT_ROOT, resolve_checkpoint
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,8 @@ class FILMModel(BaseVFIModel):
         checkpoint_path: Optional[str] = None,
         **kwargs: Any
     ) -> None:
-        film_dir = os.path.abspath("backbones/film") if os.path.exists("backbones/film") else os.path.abspath("film")
+        backbone_film = os.path.join(PROJECT_ROOT, "backbones", "film")
+        film_dir = backbone_film if os.path.exists(backbone_film) else (os.path.abspath("backbones/film") if os.path.exists("backbones/film") else os.path.abspath("film"))
         if film_dir not in sys.path:
             sys.path.insert(0, film_dir)
 

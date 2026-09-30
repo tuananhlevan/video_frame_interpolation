@@ -29,6 +29,8 @@ backbones/amt/ckpt/
 backbones/ema_vfi/ckpt/
 backbones/rife/train_log/
 backbones/interpany/
+weights/*
+!weights/.gitkeep
 
 # Keep configuration dotfiles
 !.gitignore

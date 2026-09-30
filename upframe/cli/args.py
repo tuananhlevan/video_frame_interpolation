@@ -63,7 +63,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Enable football ball-trajectory refiner and ghost suppressor")
     parser.add_argument("--cadence-filter", dest="cadence_filter", action="store_true", default=False,
                         help="Enable slow-motion duplicate-frame cadence filter")
+    parser.add_argument("--anti-flicker", dest="anti_flicker", action="store_true", default=False,
+                        help="Enable temporal anti-flicker envelope clamping to eliminate white firefly spikes")
     parser.add_argument("--scale", type=float, default=1.0,
+
                         help="Optical flow motion scale factor [0.5 - 2.0] (default: 1.0)")
     parser.add_argument("--log-dir", default="upframe_log", help="Directory for execution log files (default: upframe_log)")
     parser.add_argument("--log-file", default=None, help="Path to write execution log file (default: upframe_log/<output_name>.log)")
@@ -133,6 +136,7 @@ def parse_cli_args(args_list: Optional[List[str]] = None) -> Tuple[str, str, Pip
     config.tta = args.tta
     config.ball_refine = args.ball_refine
     config.cadence_filter = args.cadence_filter
+    config.anti_flicker = args.anti_flicker
     if args.scale != 1.0 or not args.config:
         config.scale = args.scale
     if args.deinterlace != "auto" or not args.config:
