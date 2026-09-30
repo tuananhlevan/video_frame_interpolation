@@ -1,7 +1,7 @@
 ================================================================================
 UPFRAME EVALUATION PIPELINE: COMPREHENSIVE FLAW ANALYSIS & AUDIT REPORT
 ================================================================================
-Target Repository: /home/levantuananh/VDT_VT/video_frame_interpolation
+Target Repository: video_frame_interpolation
 Module Analyzed:   eval/ (Layers 1, 2, 3, and 4)
 Companion Report:  ball_integrity_flaws.txt (deep-dive on Ball Integrity)
 

@@ -71,7 +71,7 @@ To solve this, UPFRAME organizes evaluation into an automated **4-Layer Quality 
 
 ## 2. End-to-End Execution Flow & Pipeline Architecture
 
-The core evaluation workflow is orchestrated by `EvaluationPipeline` ([`eval/pipeline.py`](file:///home/levantuananh/VDT_VT/video_frame_interpolation/eval/pipeline.py)):
+The core evaluation workflow is orchestrated by `EvaluationPipeline` ([`eval/pipeline.py`](eval/pipeline.py)):
 
 ```mermaid
 flowchart TD
@@ -105,7 +105,7 @@ flowchart TD
 
 ## 3. Layer 1: Technical Integrity & Container QC
 
-Located in [`eval/layer1_technical/`](file:///home/levantuananh/VDT_VT/video_frame_interpolation/eval/layer1_technical/).
+Located in [`eval/layer1_technical/`](eval/layer1_technical/).
 
 ### 1.1 Frame Counts & Nominal Framerate
 - **Module**: `eval.layer1_technical.frame_counts`
@@ -144,7 +144,7 @@ Located in [`eval/layer1_technical/`](file:///home/levantuananh/VDT_VT/video_fra
 
 ## 4. Layer 2: Temporal Stability & Motion Consistency
 
-Located in [`eval/layer2_temporal/`](file:///home/levantuananh/VDT_VT/video_frame_interpolation/eval/layer2_temporal/).
+Located in [`eval/layer2_temporal/`](eval/layer2_temporal/).
 
 ### 2.1 Optical Flow Warping & Bidirectional Occlusion Masking
 - **Module**: `eval.layer2_temporal.optical_flow`
@@ -183,7 +183,7 @@ Located in [`eval/layer2_temporal/`](file:///home/levantuananh/VDT_VT/video_fram
 
 ## 5. Layer 3: Football Domain-Specific Quality Control
 
-Located in [`eval/layer3_football/`](file:///home/levantuananh/VDT_VT/video_frame_interpolation/eval/layer3_football/).
+Located in [`eval/layer3_football/`](eval/layer3_football/).
 
 ### 3.1 Ball Integrity & Pitch-Line Suppression
 - **Module**: `eval.layer3_football.ball`
@@ -259,7 +259,7 @@ Located in [`eval/layer3_football/`](file:///home/levantuananh/VDT_VT/video_fram
 
 ## 6. Layer 4: Production Scorecard & Decision Engine
 
-Located in [`eval/layer4_perceptual/scorecard.py`](file:///home/levantuananh/VDT_VT/video_frame_interpolation/eval/layer4_perceptual/scorecard.py).
+Located in [`eval/layer4_perceptual/scorecard.py`](eval/layer4_perceptual/scorecard.py).
 
 ### 4.1 Quality Score Calculation & Weight Re-Normalization
 The production scorecard produces a weighted overall Quality Score on a $0.0\text{ to }10.0$ scale.
@@ -313,7 +313,7 @@ graph TD
 
 ## 7. Diagnostics, Visualizations & Reporting
 
-Located in [`eval/suspicious/`](file:///home/levantuananh/VDT_VT/video_frame_interpolation/eval/suspicious/), [`eval/visual/`](file:///home/levantuananh/VDT_VT/video_frame_interpolation/eval/visual/), and [`eval/report/`](file:///home/levantuananh/VDT_VT/video_frame_interpolation/eval/report/).
+Located in [`eval/suspicious/`](eval/suspicious/), [`eval/visual/`](eval/visual/), and [`eval/report/`](eval/report/).
 
 ### Diagnostics:
 - **Suspicious Moment Detector** (`eval.suspicious.detector`): Flags frames in the top 95th percentile of warping errors, high-motion transitions, or teleportation events for manual review.
@@ -330,7 +330,7 @@ Located in [`eval/suspicious/`](file:///home/levantuananh/VDT_VT/video_frame_int
 
 ## 8. Parallel Processing & Multi-GPU Chunking
 
-Located in [`eval/parallel/engine.py`](file:///home/levantuananh/VDT_VT/video_frame_interpolation/eval/parallel/engine.py).
+Located in [`eval/parallel/engine.py`](eval/parallel/engine.py).
 
 For large match recordings (e.g. 45-minute halves at 1080p), running single-threaded evaluation on CPU can take hours. `ParallelEvaluationEngine` distributes chunks across multiple workers and GPUs:
 
