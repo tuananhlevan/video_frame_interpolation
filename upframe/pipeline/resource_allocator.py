@@ -157,24 +157,33 @@ def calculate_optimal_allocation(
                     cost_per_w = model_vram_gb
                 else:
                     # Light / Medium models (e.g. RIFE, Blend, IFRNet, EMA-VFI-s):
-                    # Co-optimize concurrent workers AND batch size
-                    vram_step = model_vram_gb * 0.45
+                    # Co-optimize concurrent workers AND batch size to utilize 50% - 70% surplus VRAM
+                    vram_per_pair = 0.68 * max(0.5, min(4.0, res_factor))
+                    base_overhead = 1.0
+
                     if user_batch_size is not None and user_batch_size > 0:
                         optimal_batch_size = user_batch_size
                     else:
-                        # Auto-calculate batch size to saturate VRAM budget
-                        target_w = min(max_w_per_gpu_cpu, min(12, max(2, int(usable_vram // (model_vram_gb * 3)))))
-                        vram_per_w = budget_vram / max(1, target_w)
-                        raw_b = int(max(1, 1 + (vram_per_w - model_vram_gb) / vram_step))
-                        # Snap to power of 2: 1, 2, 4, 8, 16
-                        optimal_batch_size = min(16, 2 ** int(math.log2(max(1, raw_b))))
+                        # Auto-calculate batch size so that single-batch forward passes
+                        # saturate 50% - 70% of available GPU VRAM
+                        surplus = max(0.5, budget_vram - base_overhead)
+                        raw_b = round(surplus / vram_per_pair)
+                        b = max(1, (raw_b // 2) * 2 if raw_b >= 4 else raw_b)
+                        optimal_batch_size = min(48, max(1, b))
 
-                    cost_per_w = model_vram_gb + (optimal_batch_size - 1) * vram_step
-                    max_w = max(1, min(max_w_per_gpu_cpu, int(budget_vram // cost_per_w)))
+                    # Worker count per GPU: scaled to GPU tier and CPU cores
+                    # Typically 4-8 workers per GPU to balance decode/inference/encode pipelining
+                    target_w = max(4, int(usable_vram // (model_vram_gb * 2.5)))
+                    max_w = min(max_w_per_gpu_cpu, min(8, target_w))
                     if gpu["total_vram_gb"] >= 16.0 and model_key == "rife":
                         max_w = max(4, max_w)
+                    if gpu["total_vram_gb"] >= 40.0 and model_key == "rife":
+                        max_w = max(6, max_w)
 
-                total_est_vram_gb += max_w * cost_per_w
+                    # Real peak allocated/reserved VRAM on this GPU
+                    gpu_est_vram = min(free_vram, base_overhead + optimal_batch_size * vram_per_pair)
+                    total_est_vram_gb += gpu_est_vram
+
                 for _ in range(max_w):
                     allocated_devices.append(f"cuda:{gpu['index']}")
 
@@ -211,8 +220,8 @@ def calculate_optimal_allocation(
                 chunk_size = max(50, ram_bounded_chunk)
 
     estimated_chunks = math.ceil(total_frames / max(1, chunk_size))
-    primary_free_vram = target_gpus[0]["free_vram_gb"] if target_gpus else 0.0
-    pct_vram_used = round((total_est_vram_gb / max(0.1, primary_free_vram * len(target_gpus or [1]))) * 100, 1) if target_gpus else 0.0
+    total_free_vram = sum(g.get("free_vram_gb", g["total_vram_gb"]) for g in target_gpus) if target_gpus else 0.0
+    pct_vram_used = round((total_est_vram_gb / max(0.1, total_free_vram)) * 100, 1) if target_gpus else 0.0
 
     info = {
         "model_name": model_name,

@@ -98,6 +98,7 @@ class ChunkTask:
     scale: float = 1.0
     anti_flicker: bool = False
     batch_size: int = 1
+    use_nvenc: Optional[bool] = None
 
 
 

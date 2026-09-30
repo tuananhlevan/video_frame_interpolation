@@ -1,5 +1,6 @@
 """FFmpeg and FFprobe system utilities."""
 
+import functools
 import os
 import shutil
 import subprocess
@@ -18,6 +19,7 @@ def find_binary(binary_name: str) -> str:
     return binary_name
 
 
+@functools.lru_cache(maxsize=4)
 def is_nvenc_available(ffmpeg_bin: str = "ffmpeg") -> bool:
     """Checks if h264_nvenc hardware encoder is functional with current GPU and driver."""
     resolved_bin = find_binary(ffmpeg_bin)

@@ -79,6 +79,8 @@ class GPUWorker:
                 fps=task.fps
             )
 
+            chunk_nvenc = getattr(task, "use_nvenc", None)
+
             if len(source_frames) < 2:
                 if len(source_frames) == 1:
                     encoder = VideoEncoder(
@@ -88,7 +90,7 @@ class GPUWorker:
                         fps=50.0,
                         crf=14,
                         preset="ultrafast",
-                        use_nvenc=False,
+                        use_nvenc=chunk_nvenc,
                         color_space=task.color_space,
                         color_primaries=task.color_primaries,
                         color_transfer=task.color_transfer,
@@ -114,7 +116,7 @@ class GPUWorker:
                 fps=50.0,
                 crf=14,
                 preset="ultrafast",
-                use_nvenc=False,
+                use_nvenc=chunk_nvenc,
                 color_space=task.color_space,
                 color_primaries=task.color_primaries,
                 color_transfer=task.color_transfer,
@@ -183,8 +185,19 @@ class GPUWorker:
                             batch_a, batch_b, tta=self.tta, scale=scale_val
                         )
 
+                        pred_clean = (
+                            pred_batch.detach()
+                            .float()
+                            .nan_to_num(nan=0.0)
+                            .clamp(0.0, 1.0)
+                            .mul(255.0)
+                            .round()
+                            .to(torch.uint8)
+                        )
+                        pred_np_frames = pred_clean.permute(0, 2, 3, 1).cpu().numpy()
+
                         for k, local_idx in enumerate(vfi_indices):
-                            inter_np = tensor_to_frame(pred_batch[k : k + 1])
+                            inter_np = pred_np_frames[k]
                             f_curr = pairs_to_interpolate_a[k]
                             f_next = pairs_to_interpolate_b[k]
 

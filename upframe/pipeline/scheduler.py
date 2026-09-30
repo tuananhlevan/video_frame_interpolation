@@ -181,7 +181,8 @@ class PipelineScheduler:
                     cadence_filter=self.cadence_filter,
                     anti_flicker=self.anti_flicker,
                     scale=self.scale,
-                    batch_size=self.batch_size
+                    batch_size=self.batch_size,
+                    use_nvenc=self.use_nvenc
                 )
             )
 

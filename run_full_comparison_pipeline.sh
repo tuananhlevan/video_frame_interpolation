@@ -32,9 +32,10 @@ echo "=========================================================="
 
 # 1. RIFE
 echo ""
-echo "[Step 1/3] Running RIFE with ball-refine, cadence-filter, anti-flicker..."
+echo "[Step 1/3] Running RIFE with NVENC, ball-refine, cadence-filter, anti-flicker..."
 $UPFRAME "$INPUT" "${INPUT_STEM}_rife_antiflicker.mp4" \
     --model rife \
+    --nvenc \
     --ball-refine \
     --cadence-filter \
     --anti-flicker \
@@ -44,9 +45,10 @@ echo "[Step 1/3] RIFE completed successfully at $(date)!"
 
 # 2. AMT-G
 echo ""
-echo "[Step 2/3] Running AMT-G with ball-refine, cadence-filter, anti-flicker..."
+echo "[Step 2/3] Running AMT-G with NVENC, ball-refine, cadence-filter, anti-flicker..."
 $UPFRAME "$INPUT" "${INPUT_STEM}_amtg_antiflicker.mp4" \
     --model amt-g \
+    --nvenc \
     --ball-refine \
     --cadence-filter \
     --anti-flicker \
@@ -56,9 +58,10 @@ echo "[Step 2/3] AMT-G completed successfully at $(date)!"
 
 # 3. EMA-VFI + TTA
 echo ""
-echo "[Step 3/3] Running EMA-VFI with TTA, ball-refine, cadence-filter, anti-flicker..."
+echo "[Step 3/3] Running EMA-VFI with TTA, NVENC, ball-refine, cadence-filter, anti-flicker..."
 $UPFRAME "$INPUT" "${INPUT_STEM}_emavfi_tta_antiflicker.mp4" \
     --model ema-vfi \
+    --nvenc \
     --tta \
     --ball-refine \
     --cadence-filter \
