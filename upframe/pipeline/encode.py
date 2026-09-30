@@ -37,7 +37,7 @@ class VideoEncoder:
         self.source_audio_path = os.path.abspath(source_audio_path) if source_audio_path else None
         self.crf = crf
         self.preset = preset
-        self.ffmpeg_bin = find_binary(ffmpeg_bin)
+        self.ffmpeg_bin = find_binary(ffmpeg_bin, prefer_nvenc=(use_nvenc is not False))
         self.frame_bytes = width * height * 3
         self.bitrate = bitrate
         self.color_space = color_space

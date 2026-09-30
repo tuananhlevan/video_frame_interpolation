@@ -22,6 +22,18 @@ fi
 
 INPUT_STEM="$(basename "$INPUT" | sed 's/\.[^.]*$//')"
 
+# Check if NVENC hardware acceleration is supported by ffmpeg
+if ffmpeg -encoders 2>/dev/null | grep -q "h264_nvenc"; then
+    NVENC_OPT="--nvenc"
+    echo "Hardware Encoder: NVIDIA NVENC detected and enabled."
+else
+    NVENC_OPT=""
+    echo "Hardware Encoder: 'h264_nvenc' not compiled into current ffmpeg build."
+    echo "                  Using optimized libx264 software encoder."
+    echo "                  Tip (Colab/Ubuntu): To enable hardware NVENC, run:"
+    echo "                  git clone https://github.com/00SR/colab-ffmpeg-cuda.git /tmp/colab-ffmpeg-cuda && cp -r /tmp/colab-ffmpeg-cuda/bin/. /usr/bin/"
+fi
+
 echo "=========================================================="
 echo "Starting Full Sequential VFI Pipeline with Anti-Flicker"
 echo "CLI Command: $UPFRAME"
@@ -32,10 +44,10 @@ echo "=========================================================="
 
 # 1. RIFE
 echo ""
-echo "[Step 1/3] Running RIFE with NVENC, ball-refine, cadence-filter, anti-flicker..."
+echo "[Step 1/3] Running RIFE with ball-refine, cadence-filter, anti-flicker..."
 $UPFRAME "$INPUT" "${INPUT_STEM}_rife_antiflicker.mp4" \
     --model rife \
-    --nvenc \
+    $NVENC_OPT \
     --ball-refine \
     --cadence-filter \
     --anti-flicker \
@@ -45,10 +57,10 @@ echo "[Step 1/3] RIFE completed successfully at $(date)!"
 
 # 2. AMT-G
 echo ""
-echo "[Step 2/3] Running AMT-G with NVENC, ball-refine, cadence-filter, anti-flicker..."
+echo "[Step 2/3] Running AMT-G with ball-refine, cadence-filter, anti-flicker..."
 $UPFRAME "$INPUT" "${INPUT_STEM}_amtg_antiflicker.mp4" \
     --model amt-g \
-    --nvenc \
+    $NVENC_OPT \
     --ball-refine \
     --cadence-filter \
     --anti-flicker \
@@ -58,10 +70,10 @@ echo "[Step 2/3] AMT-G completed successfully at $(date)!"
 
 # 3. EMA-VFI + TTA
 echo ""
-echo "[Step 3/3] Running EMA-VFI with TTA, NVENC, ball-refine, cadence-filter, anti-flicker..."
+echo "[Step 3/3] Running EMA-VFI with TTA, ball-refine, cadence-filter, anti-flicker..."
 $UPFRAME "$INPUT" "${INPUT_STEM}_emavfi_tta_antiflicker.mp4" \
     --model ema-vfi \
-    --nvenc \
+    $NVENC_OPT \
     --tta \
     --ball-refine \
     --cadence-filter \

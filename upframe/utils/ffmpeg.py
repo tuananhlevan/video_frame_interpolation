@@ -7,22 +7,9 @@ import subprocess
 from typing import Optional
 
 
-def find_binary(binary_name: str) -> str:
-    """Finds path to ffmpeg or ffprobe executable."""
-    path = shutil.which(binary_name)
-    if path is not None:
-        return path
-    # Common fallbacks
-    for candidate in [f"/usr/bin/{binary_name}", f"/usr/local/bin/{binary_name}"]:
-        if os.path.exists(candidate) and os.access(candidate, os.X_OK):
-            return candidate
-    return binary_name
-
-
-@functools.lru_cache(maxsize=4)
-def is_nvenc_available(ffmpeg_bin: str = "ffmpeg") -> bool:
-    """Checks if h264_nvenc hardware encoder is functional with current GPU and driver."""
-    resolved_bin = find_binary(ffmpeg_bin)
+@functools.lru_cache(maxsize=16)
+def _test_nvenc(resolved_bin: str) -> bool:
+    """Tests if a specific ffmpeg binary can encode with h264_nvenc."""
     try:
         proc = subprocess.run(
             [
@@ -36,11 +23,56 @@ def is_nvenc_available(ffmpeg_bin: str = "ffmpeg") -> bool:
                 "-"
             ],
             capture_output=True,
-            text=True
+            text=True,
+            timeout=3
         )
         return proc.returncode == 0
     except Exception:
         return False
+
+
+def find_binary(binary_name: str, prefer_nvenc: bool = False) -> str:
+    """Finds path to ffmpeg or ffprobe executable.
+    
+    If prefer_nvenc is True and binary_name is 'ffmpeg', scans all candidate
+    paths and returns an NVENC-capable binary if available.
+    """
+    import sys
+    candidates = []
+
+    which_path = shutil.which(binary_name)
+    if which_path:
+        candidates.append(which_path)
+
+    py_bin = os.path.join(sys.prefix, "bin", binary_name)
+    if os.path.exists(py_bin) and os.access(py_bin, os.X_OK):
+        candidates.append(py_bin)
+
+    for p in [f"/usr/local/bin/{binary_name}", os.path.expanduser(f"~/.local/bin/{binary_name}"), f"/usr/bin/{binary_name}"]:
+        if os.path.exists(p) and os.access(p, os.X_OK):
+            candidates.append(p)
+
+    seen = set()
+    unique = []
+    for c in candidates:
+        r = os.path.realpath(c)
+        if r not in seen:
+            seen.add(r)
+            unique.append(c)
+
+    if prefer_nvenc and binary_name == "ffmpeg":
+        for cand in unique:
+            if _test_nvenc(cand):
+                return cand
+
+    return unique[0] if unique else binary_name
+
+
+@functools.lru_cache(maxsize=8)
+def is_nvenc_available(ffmpeg_bin: str = "ffmpeg") -> bool:
+    """Checks if h264_nvenc hardware encoder is functional with current GPU and driver."""
+    resolved_bin = find_binary(ffmpeg_bin, prefer_nvenc=True)
+    return _test_nvenc(resolved_bin)
 
 
 def format_duration(seconds: float) -> str:
