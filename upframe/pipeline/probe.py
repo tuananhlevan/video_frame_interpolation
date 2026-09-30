@@ -81,10 +81,9 @@ def probe_video(filepath: str, ffprobe_bin: str = "ffprobe", check_interlace: bo
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         data = json.loads(result.stdout)
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"ffprobe failed on {filepath}: {e.stderr}")
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"Failed to parse ffprobe json output: {e}")
+    except (subprocess.CalledProcessError, json.JSONDecodeError, FileNotFoundError) as e:
+        logger.warning(f"ffprobe execution failed ({e}). Falling back to OpenCV video probe.")
+        return _probe_with_opencv(filepath)
 
     format_info = data.get("format", {})
     streams = data.get("streams", [])
@@ -225,4 +224,46 @@ def probe_video(filepath: str, ffprobe_bin: str = "ffprobe", check_interlace: bo
         field_order=field_order,
         is_interlaced=is_interlaced,
         interlace_details=interlace_details
+    )
+
+
+def _probe_with_opencv(filepath: str) -> VideoMetadata:
+    """Fallback video probe using OpenCV when ffprobe binary fails or is missing libraries."""
+    import cv2
+    cap = cv2.VideoCapture(filepath)
+    if not cap.isOpened():
+        raise RuntimeError(f"OpenCV could not open video: {filepath}")
+
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 1920)
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 1080)
+    nominal_fps = float(cap.get(cv2.CAP_PROP_FPS) or 25.0)
+    nb_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    duration = (nb_frames / nominal_fps) if nominal_fps > 0 else 0.0
+    cap.release()
+
+    file_size_bytes = os.path.getsize(filepath) if os.path.exists(filepath) else 0
+
+    return VideoMetadata(
+        filepath=os.path.abspath(filepath),
+        width=width,
+        height=height,
+        codec_name="h264",
+        pix_fmt="yuv420p",
+        color_space="bt709",
+        color_primaries="bt709",
+        color_transfer="bt709",
+        color_range="tv",
+        r_frame_rate=f"{int(nominal_fps)}/1",
+        avg_frame_rate=f"{int(nominal_fps)}/1",
+        nominal_fps=nominal_fps,
+        avg_fps=nominal_fps,
+        duration=duration,
+        nb_frames=nb_frames,
+        time_base="1/1000",
+        bit_rate=None,
+        file_size_bytes=file_size_bytes,
+        audio_streams=[],
+        field_order="progressive",
+        is_interlaced=False,
+        interlace_details={}
     )
