@@ -106,6 +106,22 @@ def test_amt_g_adapter(device, fp16):
     assert model.model is None
 
 
+def test_amt_g_interpolate_batch(device):
+    """Test AMT-G native GPU tensor batch interpolation."""
+    model_cls = ModelRegistry.get("amt-g")
+    model = model_cls()
+    model.load(device=device, fp16=True)
+
+    b, h, w = 2, 64, 64
+    batch_a = torch.zeros((b, 3, h, w), device=model.device, dtype=torch.float32)
+    batch_b = torch.ones((b, 3, h, w), device=model.device, dtype=torch.float32)
+
+    pred = model.interpolate_batch(batch_a, batch_b)
+    assert pred.shape == (b, 3, h, w)
+    assert torch.is_tensor(pred)
+    model.unload()
+
+
 def test_ema_vfi_tta(device):
     """Test EMA-VFI inference with TTA enabled."""
     model_cls = ModelRegistry.get("ema-vfi")
@@ -123,6 +139,22 @@ def test_ema_vfi_tta(device):
     assert interp.shape == (h, w, 3)
     assert interp.dtype == np.uint8
 
+    model.unload()
+
+
+def test_ema_vfi_interpolate_batch(device):
+    """Test EMA-VFI native GPU tensor batch interpolation."""
+    model_cls = ModelRegistry.get("ema-vfi")
+    model = model_cls()
+    model.load(device=device, fp16=True, tta=False)
+
+    b, h, w = 2, 64, 64
+    batch_a = torch.zeros((b, 3, h, w), device=model.device, dtype=torch.float32)
+    batch_b = torch.ones((b, 3, h, w), device=model.device, dtype=torch.float32)
+
+    pred = model.interpolate_batch(batch_a, batch_b)
+    assert pred.shape == (b, 3, h, w)
+    assert torch.is_tensor(pred)
     model.unload()
 
 

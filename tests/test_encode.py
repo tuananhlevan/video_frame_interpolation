@@ -56,3 +56,36 @@ def test_gpu_worker_nvenc_passed_to_chunk_encoder(mock_decoder_cls, mock_encoder
     assert result.status == "COMPLETED"
     assert result.output_frames_count == 0
 
+
+def test_video_encoder_bitrate_and_vbr_args():
+    encoder = VideoEncoder(
+        output_filepath="test_output.mp4",
+        width=1920,
+        height=1080,
+        fps=50.0,
+        use_nvenc=False,
+        bitrate="6900k",
+        maxrate="9600k",
+        bufsize="13800k"
+    )
+    assert encoder.bitrate == "6900k"
+    assert encoder.maxrate == "9600k"
+    assert encoder.bufsize == "13800k"
+
+
+def test_chunk_task_crf_and_preset():
+    task = ChunkTask(
+        chunk_id=1,
+        start_frame=0,
+        end_frame=10,
+        input_path="input.mp4",
+        output_dir="tmp",
+        width=1920,
+        height=1080,
+        fps=25.0,
+        crf=19,
+        preset="veryfast"
+    )
+    assert task.crf == 19
+    assert task.preset == "veryfast"
+

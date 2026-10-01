@@ -149,12 +149,9 @@ def calculate_optimal_allocation(
                 budget_vram = free_vram * target_ratio
 
                 if model_vram_gb >= 5.0:
-                    # Heavy models (e.g. AMT-G, EMA-VFI): worker-bound with batch_size=1
-                    # Scale workers with VRAM capacity up to 14 workers on 80GB-96GB+ GPUs
-                    if gpu["total_vram_gb"] >= 80.0:
-                        max_w = min(14, max(1, int(usable_vram // model_vram_gb)))
-                    else:
-                        max_w = min(6, max(1, int(usable_vram // model_vram_gb)))
+                    # Heavy models (e.g. AMT-G, AMT-L, EMA-VFI, GMFSS):
+                    # Cap concurrent workers per GPU at 6 to prevent context thrashing and VRAM bloat
+                    max_w = min(6, max(1, int(usable_vram // model_vram_gb)))
                     optimal_batch_size = user_batch_size or 1
                     cost_per_w = model_vram_gb
                     total_est_vram_gb += max_w * cost_per_w

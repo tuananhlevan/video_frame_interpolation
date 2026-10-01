@@ -140,7 +140,8 @@ class AMTModel(BaseVFIModel):
         tb, _ = pad_to_multiple(tb, multiple=32)
 
         with torch.no_grad():
-            embt = torch.tensor(0.5, device=self.device).view(1, 1, 1, 1).float()
+            b = ta.shape[0]
+            embt = torch.full((b, 1, 1, 1), 0.5, device=self.device, dtype=torch.float32)
             if self.half_precision:
                 with torch.amp.autocast("cuda"):
                     outputs = self.model(ta, tb, embt=embt, iters=self.niters, eval=True)
@@ -157,6 +158,41 @@ class AMTModel(BaseVFIModel):
         if is_numpy:
             return tensor_to_frame(pred)
         return pred
+
+    def interpolate_batch(
+        self,
+        batch_a: torch.Tensor,
+        batch_b: torch.Tensor,
+        **kwargs: Any
+    ) -> torch.Tensor:
+        """Synthesize intermediate frames for a batch of frames directly on GPU."""
+        if not self.is_loaded or self.model is None:
+            raise RuntimeError("AMT model is not loaded. Call load() first.")
+
+        ta = batch_a.to(self.device).float()
+        tb = batch_b.to(self.device).float()
+        b, _, orig_h, orig_w = ta.shape
+
+        ta, _ = pad_to_multiple(ta, multiple=32)
+        tb, _ = pad_to_multiple(tb, multiple=32)
+        embt = torch.full((b, 1, 1, 1), 0.5, device=self.device, dtype=torch.float32)
+
+        with torch.no_grad():
+            if self.half_precision:
+                with torch.amp.autocast("cuda"):
+                    outputs = self.model(ta, tb, embt=embt, iters=self.niters, eval=True)
+            else:
+                outputs = self.model(ta, tb, embt=embt, iters=self.niters, eval=True)
+
+            if isinstance(outputs, dict):
+                pred = outputs.get("imgt_pred", outputs)
+            elif isinstance(outputs, (list, tuple)):
+                pred = outputs[0]
+            else:
+                pred = outputs
+
+        pred = unpad(pred, orig_h, orig_w)
+        return torch.clamp(pred, 0.0, 1.0)
 
     def unload(self) -> None:
         if self.model is not None:

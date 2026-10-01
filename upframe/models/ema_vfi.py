@@ -224,6 +224,47 @@ def _register_ema_vfi(variant: str):
                 return tensor_to_frame(pred)
             return pred
 
+        def interpolate_batch(
+            self,
+            batch_a: torch.Tensor,
+            batch_b: torch.Tensor,
+            **kwargs: Any,
+        ) -> torch.Tensor:
+            """Synthesize intermediate frames for a batch of frames directly on GPU."""
+            if not self.is_loaded or self._ema_model is None:
+                raise RuntimeError(
+                    f"EMA-VFI ({self._variant}) not loaded. Call model.load() first."
+                )
+
+            img0 = batch_a.to(self.device).float()
+            img1 = batch_b.to(self.device).float()
+
+            padder = _EMAVFIPadder(img0.shape, divisor=32)
+            img0_p = padder.pad(img0)
+            img1_p = padder.pad(img1)
+
+            timestep = kwargs.get("timestep", 0.5)
+            tta = kwargs.get("tta", self._use_tta)
+
+            def _forward(net, x):
+                af, mf = net.feature_bone(x[:, :3], x[:, 3:6])
+                flow, mask = net.calculate_flow(x, timestep, af, mf)
+                return net.coraseWarp_and_Refine(x, af, flow, mask)
+
+            with torch.no_grad():
+                with torch.amp.autocast("cuda", enabled=self.half_precision):
+                    imgs = torch.cat((img0_p, img1_p), 1)
+                    if not tta:
+                        pred = _forward(self._ema_model.net, imgs)
+                    else:
+                        pred_norm = _forward(self._ema_model.net, imgs)
+                        imgs_flip = imgs.flip(2).flip(3)
+                        pred_flip = _forward(self._ema_model.net, imgs_flip)
+                        pred = (pred_norm + pred_flip.flip(2).flip(3)) / 2.0
+
+            pred = padder.unpad(pred)
+            return torch.clamp(pred, 0.0, 1.0)
+
         def unload(self) -> None:
             if self._ema_model is not None:
                 del self._ema_model.net

@@ -36,10 +36,6 @@ class WorkerPool:
         self.anti_flicker = anti_flicker
         self.scale = scale
         self.batch_size = batch_size
-        import threading
-        self.device_locks: Dict[str, threading.Lock] = {
-            dev: threading.Lock() for dev in set(self.devices) if dev.startswith("cuda")
-        }
         self.workers: Dict[int, GPUWorker] = {}
         self._initialize_workers()
 
@@ -56,7 +52,7 @@ class WorkerPool:
                 anti_flicker=self.anti_flicker,
                 scale=self.scale,
                 batch_size=self.batch_size,
-                device_lock=self.device_locks.get(dev)
+                device_lock=None
             )
             worker.initialize()
             self.workers[idx] = worker

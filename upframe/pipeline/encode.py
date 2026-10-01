@@ -24,6 +24,8 @@ class VideoEncoder:
         preset: str = "medium",
         use_nvenc: Optional[bool] = None,
         bitrate: Optional[str] = None,
+        maxrate: Optional[str] = None,
+        bufsize: Optional[str] = None,
         color_space: Optional[str] = None,
         color_primaries: Optional[str] = None,
         color_transfer: Optional[str] = None,
@@ -40,6 +42,8 @@ class VideoEncoder:
         self.ffmpeg_bin = find_binary(ffmpeg_bin, prefer_nvenc=(use_nvenc is not False))
         self.frame_bytes = width * height * 3
         self.bitrate = bitrate
+        self.maxrate = maxrate
+        self.bufsize = bufsize
         self.color_space = color_space
         self.color_primaries = color_primaries
         self.color_transfer = color_transfer
@@ -85,21 +89,40 @@ class VideoEncoder:
         if self.source_audio_path and os.path.exists(self.source_audio_path):
             cmd.extend(["-i", self.source_audio_path])
 
+        res_ratio = (self.width * self.height) / (1920 * 1080)
+        default_target_k = int(7000 * max(0.4, min(4.0, res_ratio)))
+
         if self.use_nvenc:
             logger.info("Using NVIDIA NVENC hardware encoder (h264_nvenc)")
+            cq_val = self.crf if self.crf is not None else 21
+            target_b = self.bitrate if self.bitrate else f"{default_target_k}k"
+            max_b = self.maxrate if self.maxrate else f"{int(default_target_k * 1.4)}k"
+            buf_b = self.bufsize if self.bufsize else f"{default_target_k * 2}k"
+
             cmd.extend([
                 "-c:v", "h264_nvenc",
                 "-preset", "p5",
-                "-cq", str(self.crf),
-                "-b:v", self.bitrate if self.bitrate else "0"
+                "-rc:v", "vbr",
+                "-cq:v", str(cq_val),
+                "-b:v", target_b,
+                "-maxrate:v", max_b,
+                "-bufsize:v", buf_b
             ])
         else:
             logger.info("Using software encoder (libx264)")
+            crf_val = self.crf if self.crf is not None else 21
             cmd.extend([
                 "-c:v", "libx264",
                 "-preset", self.preset,
-                "-crf", str(self.crf)
+                "-crf", str(crf_val)
             ])
+            if self.bitrate:
+                max_b = self.maxrate if self.maxrate else self.bitrate
+                buf_b = self.bufsize if self.bufsize else f"{default_target_k * 2}k"
+                cmd.extend([
+                    "-maxrate", max_b,
+                    "-bufsize", buf_b
+                ])
 
         # Dynamically adapt color matrix and color range based on source metadata:
         # 1. Color Matrix:

@@ -99,6 +99,8 @@ class ChunkTask:
     anti_flicker: bool = False
     batch_size: int = 1
     use_nvenc: Optional[bool] = None
+    crf: int = 20
+    preset: str = "veryfast"
 
 
 

@@ -70,3 +70,24 @@ def test_anti_flicker_process_tensor_matches_numpy():
     tensor_cleaned = tensor_to_frames_batch(t_cleaned)[0]
 
     np.testing.assert_array_equal(cpu_cleaned, tensor_cleaned)
+
+
+def test_anti_flicker_default_margin():
+    filter_mod = TemporalAntiFlicker()
+    assert filter_mod.margin == 12
+
+
+def test_anti_flicker_rejects_mismatched_ball_candidates():
+    # If candidates in F0 and F1 differ greatly in radius, protect_ball should not carve an un-clamped hole
+    filter_mod = TemporalAntiFlicker(protect_ball=True)
+    f0 = np.zeros((200, 200, 3), dtype=np.uint8)
+    f1 = np.zeros((200, 200, 3), dtype=np.uint8)
+    f_inter = np.zeros((200, 200, 3), dtype=np.uint8)
+    # Firefly in the middle
+    f_inter[100, 100] = [255, 255, 255]
+
+    cleaned = filter_mod.process(f0, f_inter, f1)
+    # Since no consistent ball exists, firefly should be clamped to margin (12)
+    assert cleaned[100, 100, 0] <= 12
+    assert cleaned[100, 100, 1] <= 12
+    assert cleaned[100, 100, 2] <= 12

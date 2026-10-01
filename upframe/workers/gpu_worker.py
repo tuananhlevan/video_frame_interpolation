@@ -83,6 +83,9 @@ class GPUWorker:
 
             chunk_nvenc = getattr(task, "use_nvenc", None)
 
+            chunk_crf = getattr(task, "crf", 20) or 20
+            chunk_preset = getattr(task, "preset", "veryfast") or "veryfast"
+
             if len(source_frames) < 2:
                 if len(source_frames) == 1:
                     encoder = VideoEncoder(
@@ -90,8 +93,8 @@ class GPUWorker:
                         width=task.width,
                         height=task.height,
                         fps=50.0,
-                        crf=14,
-                        preset="ultrafast",
+                        crf=chunk_crf,
+                        preset=chunk_preset,
                         use_nvenc=chunk_nvenc,
                         color_space=task.color_space,
                         color_primaries=task.color_primaries,
@@ -116,8 +119,8 @@ class GPUWorker:
                 width=task.width,
                 height=task.height,
                 fps=50.0,
-                crf=14,
-                preset="ultrafast",
+                crf=chunk_crf,
+                preset=chunk_preset,
                 use_nvenc=chunk_nvenc,
                 color_space=task.color_space,
                 color_primaries=task.color_primaries,
@@ -143,107 +146,83 @@ class GPUWorker:
 
             # Generate 50 fps interleaved frames:
             # F[0], F_inter[0.5], F[1], F_inter[1.5], ..., F[N-1]
-            if chunk_batch_size > 1:
-                from upframe.utils.tensor import frames_to_tensor_batch, tensor_to_frames_batch
-                import torch
+            from upframe.utils.tensor import frames_to_tensor_batch, tensor_to_frames_batch
+            import torch
 
-                i = 0
-                n_pairs = len(source_frames) - 1
-                while i < n_pairs:
-                    end_i = min(i + chunk_batch_size, n_pairs)
-                    vfi_indices = []
-                    pairs_to_interpolate_a = []
-                    pairs_to_interpolate_b = []
-                    results = [None] * (end_i - i)
+            i = 0
+            n_pairs = len(source_frames) - 1
+            batch_sz = max(1, chunk_batch_size)
 
-                    for j in range(i, end_i):
-                        f_curr = source_frames[j]
-                        f_next = source_frames[j + 1]
-                        local_idx = j - i
+            while i < n_pairs:
+                end_i = min(i + batch_sz, n_pairs)
+                vfi_indices = []
+                pairs_to_interpolate_a = []
+                pairs_to_interpolate_b = []
+                results = [None] * (end_i - i)
 
-                        if is_scene_cut(f_curr, f_next, threshold=task.scene_threshold):
-                            scene_cuts += 1
-                            results[local_idx] = f_curr
-                        elif use_cadence and is_duplicate_frame(f_curr, f_next):
-                            results[local_idx] = f_curr
-                        else:
-                            vfi_indices.append(local_idx)
-                            pairs_to_interpolate_a.append(f_curr)
-                            pairs_to_interpolate_b.append(f_next)
+                for j in range(i, end_i):
+                    f_curr = source_frames[j]
+                    f_next = source_frames[j + 1]
+                    local_idx = j - i
 
-                    if vfi_indices:
-                        dev = getattr(self.model, "device", torch.device("cpu"))
-                        half_mode = getattr(self.model, "half_precision", self.fp16)
-                        batch_a = frames_to_tensor_batch(pairs_to_interpolate_a, dev, half=half_mode)
-                        batch_b = frames_to_tensor_batch(pairs_to_interpolate_b, dev, half=half_mode)
+                    if is_scene_cut(f_curr, f_next, threshold=task.scene_threshold):
+                        scene_cuts += 1
+                        results[local_idx] = f_curr
+                    elif use_cadence and is_duplicate_frame(f_curr, f_next):
+                        results[local_idx] = f_curr
+                    else:
+                        vfi_indices.append(local_idx)
+                        pairs_to_interpolate_a.append(f_curr)
+                        pairs_to_interpolate_b.append(f_next)
 
-                        if self.device_lock is not None:
-                            with self.device_lock:
-                                pred_batch = self.model.interpolate_batch(
-                                    batch_a, batch_b, tta=self.tta, scale=scale_val
-                                )
-                        else:
+                if vfi_indices:
+                    dev = getattr(self.model, "device", torch.device("cpu"))
+                    half_mode = getattr(self.model, "half_precision", self.fp16)
+                    batch_a = frames_to_tensor_batch(pairs_to_interpolate_a, dev, half=half_mode)
+                    batch_b = frames_to_tensor_batch(pairs_to_interpolate_b, dev, half=half_mode)
+
+                    if self.device_lock is not None:
+                        with self.device_lock:
                             pred_batch = self.model.interpolate_batch(
                                 batch_a, batch_b, tta=self.tta, scale=scale_val
                             )
-
-                        if use_anti_flicker and self.temporal_anti_flicker is not None:
-                            pred_batch = self.temporal_anti_flicker.process_tensor(
-                                batch_a, pred_batch, batch_b
-                            )
-
-                        del batch_a, batch_b
-
-                        pred_np_frames = tensor_to_frames_batch(pred_batch)
-                        del pred_batch
-
-                        for k, local_idx in enumerate(vfi_indices):
-                            inter_np = pred_np_frames[k]
-                            f_curr = pairs_to_interpolate_a[k]
-                            f_next = pairs_to_interpolate_b[k]
-
-                            if use_ball_refine and self.ball_refiner is not None:
-                                inter_np = self.ball_refiner.refine(f_curr, inter_np, f_next, timestep=0.5)
-                            results[local_idx] = inter_np
-
-                    for j in range(i, end_i):
-                        encoder.write_frame(source_frames[j])
-                        total_output_frames += 1
-                        encoder.write_frame(results[j - i])
-                        total_output_frames += 1
-
-                    i = end_i
-            else:
-                for i in range(len(source_frames) - 1):
-                    f_curr = source_frames[i]
-                    f_next = source_frames[i + 1]
-
-                    # Write current source frame
-                    encoder.write_frame(f_curr)
-                    total_output_frames += 1
-
-                    # Check scene cut
-                    if is_scene_cut(f_curr, f_next, threshold=task.scene_threshold):
-                        scene_cuts += 1
-                        # Avoid hybrid blur: hold/duplicate current frame
-                        encoder.write_frame(f_curr)
-                    elif use_cadence and is_duplicate_frame(f_curr, f_next):
-                        # Duplicate pair in slow-motion replay: preserve smooth cadence without AI hallucination
-                        encoder.write_frame(f_curr)
                     else:
-                        # Run VFI model
-                        if self.device_lock is not None:
-                            with self.device_lock:
-                                inter = self.model.interpolate(f_curr, f_next, tta=self.tta, scale=scale_val)
-                        else:
-                            inter = self.model.interpolate(f_curr, f_next, tta=self.tta, scale=scale_val)
-                        if use_ball_refine and self.ball_refiner is not None:
-                            inter = self.ball_refiner.refine(f_curr, inter, f_next, timestep=0.5)
-                        if use_anti_flicker and self.temporal_anti_flicker is not None:
-                            inter = self.temporal_anti_flicker.process(f_curr, inter, f_next)
-                        encoder.write_frame(inter)
+                        pred_batch = self.model.interpolate_batch(
+                            batch_a, batch_b, tta=self.tta, scale=scale_val
+                        )
 
+                    # 1. GPU tensor-accelerated anti-flicker envelope clamping
+                    if use_anti_flicker and self.temporal_anti_flicker is not None:
+                        pred_batch = self.temporal_anti_flicker.process_tensor(
+                            batch_a, pred_batch, batch_b
+                        )
+
+                    del batch_a, batch_b
+
+                    pred_np_frames = tensor_to_frames_batch(pred_batch)
+                    del pred_batch
+
+                    for k, local_idx in enumerate(vfi_indices):
+                        inter_np = pred_np_frames[k]
+                        f_curr = pairs_to_interpolate_a[k]
+                        f_next = pairs_to_interpolate_b[k]
+
+                        # 2. Football trajectory refiner
+                        if use_ball_refine and self.ball_refiner is not None:
+                            inter_np = self.ball_refiner.refine(f_curr, inter_np, f_next, timestep=0.5)
+                            # 3. Post-refinement anti-flicker guard to ensure no inpainting fireflies/pops escape
+                            if use_anti_flicker and self.temporal_anti_flicker is not None:
+                                inter_np = self.temporal_anti_flicker.process(f_curr, inter_np, f_next)
+
+                        results[local_idx] = inter_np
+
+                for j in range(i, end_i):
+                    encoder.write_frame(source_frames[j])
                     total_output_frames += 1
+                    encoder.write_frame(results[j - i])
+                    total_output_frames += 1
+
+                i = end_i
 
             # Write the last source frame of the chunk
             encoder.write_frame(source_frames[-1])

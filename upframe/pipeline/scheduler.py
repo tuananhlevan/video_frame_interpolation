@@ -182,7 +182,9 @@ class PipelineScheduler:
                     anti_flicker=self.anti_flicker,
                     scale=self.scale,
                     batch_size=self.batch_size,
-                    use_nvenc=self.use_nvenc
+                    use_nvenc=self.use_nvenc,
+                    crf=self.crf,
+                    preset="veryfast"
                 )
             )
 
@@ -229,6 +231,21 @@ class PipelineScheduler:
         sorted_chunk_ids = sorted(chunk_results.keys())
         chunk_files = [chunk_results[cid].output_file for cid in sorted_chunk_ids if chunk_results[cid].output_file]
 
+        target_bitrate = None
+        max_bitrate = None
+        bufsize = None
+        if self.metadata.bit_rate and self.metadata.bit_rate > 0:
+            src_bps = self.metadata.bit_rate
+            res_ratio = (self.metadata.width * self.metadata.height) / (1920 * 1080)
+            target_bps = int(src_bps * 1.45)
+            min_bps = int(3_500_000 * max(0.4, res_ratio))
+            max_bps_cap = int(12_000_000 * max(0.4, res_ratio))
+            target_bps = max(min_bps, min(max_bps_cap, target_bps))
+            max_bps = int(target_bps * 1.4)
+            target_bitrate = f"{target_bps // 1000}k"
+            max_bitrate = f"{max_bps // 1000}k"
+            bufsize = f"{(target_bps * 2) // 1000}k"
+
         encoder = VideoEncoder(
             output_filepath=self.output_filepath,
             width=self.metadata.width,
@@ -238,6 +255,9 @@ class PipelineScheduler:
             crf=self.crf,
             preset=self.preset,
             use_nvenc=self.use_nvenc,
+            bitrate=target_bitrate,
+            maxrate=max_bitrate,
+            bufsize=bufsize,
             color_space=self.metadata.color_space,
             color_primaries=self.metadata.color_primaries,
             color_transfer=self.metadata.color_transfer,

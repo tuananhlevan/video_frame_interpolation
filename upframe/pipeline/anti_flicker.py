@@ -26,7 +26,7 @@ class TemporalAntiFlicker:
     def __init__(
         self,
         radius: int = 3,
-        margin: int = 15,
+        margin: int = 12,
         protect_ball: bool = True,
         clamp_undershoot: bool = True
     ) -> None:
@@ -115,18 +115,21 @@ class TemporalAntiFlicker:
         if ball_mask is not None and np.any(ball_mask):
             clamped[ball_mask > 0] = frame_inter[ball_mask > 0]
         elif self.protect_ball:
-            cands_0 = detect_ball_candidates(frame_0, min_circularity=0.45)
-            cands_1 = detect_ball_candidates(frame_1, min_circularity=0.45)
+            cands_0 = detect_ball_candidates(frame_0, min_circularity=0.50)
+            cands_1 = detect_ball_candidates(frame_1, min_circularity=0.50)
             if cands_0 and cands_1:
                 b0 = max(cands_0, key=lambda x: x[3])
                 b1 = max(cands_1, key=lambda x: x[3])
-                disp = float(np.hypot(b1[0] - b0[0], b1[1] - b0[1]))
-                if 25.0 <= disp <= 160.0:
-                    mx = int(round((b0[0] + b1[0]) / 2.0))
-                    my = int(round((b0[1] + b1[1]) / 2.0))
-                    r = int(round(max(b0[2], b1[2]) + 15))
-                    mask = np.zeros(frame_inter.shape[:2], dtype=np.uint8)
-                    cv2.circle(mask, (mx, my), r, 1, thickness=-1)
-                    clamped[mask == 1] = frame_inter[mask == 1]
+                # Only protect genuine ball matches with similar radius (avoiding shoes / line artifacts)
+                if abs(b0[2] - b1[2]) <= 5.0 and b0[3] >= 0.50 and b1[3] >= 0.50:
+                    disp = float(np.hypot(b1[0] - b0[0], b1[1] - b0[1]))
+                    if 25.0 <= disp <= 160.0:
+                        mx = int(round((b0[0] + b1[0]) / 2.0))
+                        my = int(round((b0[1] + b1[1]) / 2.0))
+                        # Tightly mask only the actual ball radius (+2px safety margin)
+                        r = int(round(max(b0[2], b1[2]) + 2))
+                        mask = np.zeros(frame_inter.shape[:2], dtype=np.uint8)
+                        cv2.circle(mask, (mx, my), r, 1, thickness=-1)
+                        clamped[mask == 1] = frame_inter[mask == 1]
 
         return clamped

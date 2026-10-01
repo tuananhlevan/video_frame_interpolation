@@ -70,6 +70,10 @@ class BallRefiner:
         x0, y0, r0, circ0 = ball_0
         x1, y1, r1, circ1 = ball_1
 
+        # Reject poor circularity or mismatched radius (e.g. false candidate pairs like shoe vs line)
+        if circ0 < 0.48 or circ1 < 0.48 or abs(r0 - r1) > 6.0:
+            return frame_inter
+
         disp = math.hypot(x1 - x0, y1 - y0)
         if disp < self.min_motion_threshold or disp > self.max_motion_threshold:
             # Small displacement (handled well by standard optical flow) or implausible jump
@@ -136,6 +140,10 @@ class BallRefiner:
         patch_1 = get_ball_patch(frame_1, x1, y1)
 
         if patch_0 is not None and patch_1 is not None and patch_0.shape == patch_1.shape:
+            # Check appearance similarity: if patches have completely different colors, abort
+            diff = float(np.abs(patch_0.astype(np.float32) - patch_1.astype(np.float32)).mean())
+            if diff > 55.0:
+                return output_frame
             ball_patch = cv2.addWeighted(patch_0, 1.0 - timestep, patch_1, timestep, 0)
         elif patch_0 is not None:
             ball_patch = patch_0

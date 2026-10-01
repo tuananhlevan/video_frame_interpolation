@@ -5,7 +5,9 @@ set -e
 # Fall back to python module execution if 'upframe' is not yet in PATH
 if command -v upframe &>/dev/null; then
     UPFRAME="upframe"
-elif command -v python3 &>/dev/null; then
+elif python -c "import torch, upframe" &>/dev/null; then
+    UPFRAME="python -m upframe.cli.upframe"
+elif python3 -c "import torch, upframe" &>/dev/null; then
     UPFRAME="python3 -m upframe.cli.upframe"
 else
     UPFRAME="python -m upframe.cli.upframe"
