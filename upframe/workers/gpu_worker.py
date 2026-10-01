@@ -199,10 +199,6 @@ class GPUWorker:
                         pred_np_frames = tensor_to_frames_batch(pred_batch)
                         del pred_batch
 
-                        is_cuda = (hasattr(dev, "type") and dev.type == "cuda") or (isinstance(dev, str) and dev.startswith("cuda"))
-                        if is_cuda and torch.cuda.is_available():
-                            torch.cuda.empty_cache()
-
                     for k, local_idx in enumerate(vfi_indices):
                         inter_np = pred_np_frames[k]
                         f_curr = pairs_to_interpolate_a[k]

@@ -4,7 +4,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 import logging
 import threading
 import time
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from upframe.core.types import ChunkResult, ChunkTask
 from upframe.workers.gpu_worker import GPUWorker
 
@@ -38,10 +38,23 @@ class WorkerPool:
         self.scale = scale
         self.batch_size = batch_size
         self.workers: Dict[int, GPUWorker] = {}
-        # Serialize GPU inference per physical/CUDA device to strictly bound peak activation memory
-        self.device_locks: Dict[str, threading.Lock] = {
-            dev: threading.Lock() for dev in set(self.devices) if dev.startswith("cuda")
-        }
+        # Concurrency semaphore per physical CUDA device:
+        # - On >= 80GB GPUs (e.g. RTX 6000 Blackwell 96GB), allow 2 concurrent forward passes to maximize SM occupancy
+        # - On < 80GB GPUs (e.g. RTX 5060 Ti 16GB), strict serialization (1 concurrent) to prevent OOM
+        self.device_locks: Dict[str, Any] = {}
+        for dev in set(self.devices):
+            if dev.startswith("cuda"):
+                concurrency = 1
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        idx = int(dev.split(":")[1]) if ":" in dev else 0
+                        total_gb = torch.cuda.get_device_properties(idx).total_memory / (1024 ** 3)
+                        if total_gb >= 80.0:
+                            concurrency = 2
+                except Exception:
+                    concurrency = 1
+                self.device_locks[dev] = threading.Semaphore(concurrency)
         self._initialize_workers()
 
     def _initialize_workers(self) -> None:
