@@ -69,12 +69,32 @@ def test_anti_flicker_process_tensor_matches_numpy():
     t_cleaned = filter_mod.process_tensor(t0, t_inter, t1)
     tensor_cleaned = tensor_to_frames_batch(t_cleaned)[0]
 
-    np.testing.assert_array_equal(cpu_cleaned, tensor_cleaned)
+    # Verify equivalence within 1 LSB (due to float32 1/255.0 vs uint8 quantization)
+    np.testing.assert_allclose(cpu_cleaned, tensor_cleaned, atol=1)
 
 
 def test_anti_flicker_default_margin():
     filter_mod = TemporalAntiFlicker()
     assert filter_mod.margin == 12
+    assert filter_mod.radius == 16
+
+
+def test_anti_flicker_preserves_fast_moving_socks():
+    filter_mod = TemporalAntiFlicker(radius=16, margin=15, protect_ball=False)
+    # Green pitch background
+    f0 = np.full((100, 100, 3), [40, 120, 40], dtype=np.uint8)
+    f1 = np.full((100, 100, 3), [40, 120, 40], dtype=np.uint8)
+    # White sock at x=30 in f0
+    f0[30:70, 28:34] = [240, 240, 240]
+    # White sock moves 20 pixels to x=50 in f1
+    f1[30:70, 48:54] = [240, 240, 240]
+    # Intermediate frame at t=0.5: white sock at x=40 (moved 10px from f0, 10px from f1)
+    f_inter = np.full((100, 100, 3), [40, 120, 40], dtype=np.uint8)
+    f_inter[30:70, 38:44] = [240, 240, 240]
+
+    cleaned = filter_mod.process(f0, f_inter, f1)
+    # Moving white sock must remain pure white (>200), not shredded into green grass (<60)
+    assert np.all(cleaned[30:70, 38:44] >= 200)
 
 
 def test_anti_flicker_rejects_mismatched_ball_candidates():

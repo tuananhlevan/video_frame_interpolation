@@ -213,9 +213,6 @@ class GPUWorker:
                         # 2. Football trajectory refiner
                         if use_ball_refine and self.ball_refiner is not None:
                             inter_np = self.ball_refiner.refine(f_curr, inter_np, f_next, timestep=0.5)
-                            # 3. Post-refinement anti-flicker guard to ensure no inpainting fireflies/pops escape
-                            if use_anti_flicker and self.temporal_anti_flicker is not None:
-                                inter_np = self.temporal_anti_flicker.process(f_curr, inter_np, f_next)
 
                         results[local_idx] = inter_np
 
