@@ -4,15 +4,13 @@ set -e
 # ==============================================================================
 # UpFrame Full Sequential Comparison Pipeline
 #
-# Runs 3 top VFI backbones (RIFE, AMT-G, EMA-VFI + TTA), applies GPU temporal
-# postprocess deflickering to eliminate firefly spikes, and computes a 4-layer
-# side-by-side benchmark comparison scorecard.
+# Runs 3 top VFI backbones (RIFE, AMT-G, EMA-VFI + TTA) and applies GPU temporal
+# postprocess deflickering to eliminate firefly spikes.
 #
 # Usage:
 #   ./run_full_comparison_pipeline.sh [path/to/video.mp4] [options]
 # Options:
 #   --ball-refine      Enable football trajectory ball refiner (disabled by default)
-#   --skip-eval        Skip final 4-layer evaluation benchmark
 #   --device <dev>     Force compute device (default: cuda:0 if available, else cpu)
 # ==============================================================================
 
@@ -42,7 +40,6 @@ POSTPROCESS="$PYTHON_CMD -m upframe.pipeline.postprocess"
 # Parse arguments
 INPUT=""
 BALL_OPT=""
-RUN_EVAL=true
 DEVICE="cuda:0"
 
 # Check GPU availability
@@ -58,10 +55,6 @@ while [ $# -gt 0 ]; do
             ;;
         --ball-refine)
             BALL_OPT="--ball-refine"
-            shift
-            ;;
-        --skip-eval|--no-eval)
-            RUN_EVAL=false
             shift
             ;;
         --device)
@@ -94,7 +87,7 @@ fi
 
 if [ ! -f "$INPUT" ]; then
     echo "Error: Input video not found at: $INPUT"
-    echo "Usage: $0 [path/to/video.mp4] [--ball-refine] [--skip-eval]"
+    echo "Usage: $0 [path/to/video.mp4] [--ball-refine] [--device <dev>]"
     exit 1
 fi
 
@@ -118,7 +111,6 @@ echo " Python Bin   : $PYTHON_CMD"
 echo " Input Video  : $INPUT"
 echo " Target Device: $DEVICE"
 echo " Ball Refine  : $([ -n "$BALL_OPT" ] && echo 'Enabled' || echo 'Disabled (safe mode)')"
-echo " Benchmark QC : $([ "$RUN_EVAL" = true ] && echo 'Enabled' || echo 'Skipped')"
 echo " Models       : 1) RIFE  ->  2) AMT-G  ->  3) EMA-VFI + TTA"
 echo " Start time   : $(date)"
 echo "=========================================================="
@@ -205,27 +197,6 @@ $POSTPROCESS \
 
 echo "[Stage 3/3] EMA-VFI finished -> Clean output: $CLEAN_EMAVFI ($(date))"
 
-# ------------------------------------------------------------------------------
-# 4. 4-Layer Comparative Evaluation & Scorecard
-# ------------------------------------------------------------------------------
-if [ "$RUN_EVAL" = true ]; then
-    echo ""
-    echo "=========================================================="
-    echo "[Stage 4/4] Executing 4-Layer Comparison Benchmark"
-    echo "Comparing: RIFE vs. AMT-G vs. EMA-VFI"
-    echo "=========================================================="
-    
-    BENCHMARK_DIR="evaluation_log/benchmark_${INPUT_STEM}"
-    $PYTHON_CMD -m eval.cli benchmark \
-        --source "$INPUT" \
-        --models "RIFE=${CLEAN_RIFE},AMT-G=${CLEAN_AMTG},EMA-VFI=${CLEAN_EMAVFI}" \
-        --eval-dir "$BENCHMARK_DIR" \
-        --workers 2
-
-    echo ""
-    echo "Evaluation reports saved to: $BENCHMARK_DIR"
-fi
-
 echo ""
 echo "=========================================================="
 echo " FULL PIPELINE COMPLETED SUCCESSFULLY AT $(date)!"
@@ -233,7 +204,4 @@ echo " Outputs:"
 echo "   1) RIFE Clean   : $CLEAN_RIFE"
 echo "   2) AMT-G Clean  : $CLEAN_AMTG"
 echo "   3) EMA-VFI Clean: $CLEAN_EMAVFI"
-if [ "$RUN_EVAL" = true ]; then
-    echo " Benchmark Scorecard: evaluation_log/benchmark_${INPUT_STEM}"
-fi
 echo "=========================================================="
