@@ -137,22 +137,33 @@ class TemporalAntiFlicker:
         if ball_mask is not None and np.any(ball_mask):
             clamped[ball_mask > 0] = frame_inter[ball_mask > 0]
         elif self.protect_ball:
-            cands_0 = detect_ball_candidates(frame_0, min_circularity=0.50)
-            cands_1 = detect_ball_candidates(frame_1, min_circularity=0.50)
-            if cands_0 and cands_1:
-                b0 = max(cands_0, key=lambda x: x[3])
-                b1 = max(cands_1, key=lambda x: x[3])
-                # Only protect genuine ball matches with similar radius (avoiding shoes / line artifacts)
-                if abs(b0[2] - b1[2]) <= 5.0 and b0[3] >= 0.50 and b1[3] >= 0.50:
+            cands_0 = detect_ball_candidates(frame_0, min_circularity=0.48)
+            cands_1 = detect_ball_candidates(frame_1, min_circularity=0.48)
+            best_pair = None
+            best_score = -1.0
+            for b0 in cands_0:
+                if any(np.hypot(x[0] - b0[0], x[1] - b0[1]) < 20.0 for x in cands_1):
+                    continue
+                for b1 in cands_1:
+                    if any(np.hypot(x[0] - b1[0], x[1] - b1[1]) < 20.0 for x in cands_0):
+                        continue
+                    if abs(b0[2] - b1[2]) > 3.5:
+                        continue
                     disp = float(np.hypot(b1[0] - b0[0], b1[1] - b0[1]))
                     if 25.0 <= disp <= 160.0:
-                        mx = int(round((b0[0] + b1[0]) / 2.0))
-                        my = int(round((b0[1] + b1[1]) / 2.0))
-                        # Tightly mask only the actual ball radius (+2px safety margin)
-                        r = int(round(max(b0[2], b1[2]) + 2))
-                        mask = np.zeros(frame_inter.shape[:2], dtype=np.uint8)
-                        cv2.circle(mask, (mx, my), r, 1, thickness=-1)
-                        clamped[mask == 1] = frame_inter[mask == 1]
+                        score = b0[3] * b1[3]
+                        if score > best_score:
+                            best_score = score
+                            best_pair = (b0, b1, disp)
+
+            if best_pair is not None:
+                b0, b1, disp = best_pair
+                mx = int(round((b0[0] + b1[0]) / 2.0))
+                my = int(round((b0[1] + b1[1]) / 2.0))
+                r = int(round(max(b0[2], b1[2]) + 2))
+                mask = np.zeros(frame_inter.shape[:2], dtype=np.uint8)
+                cv2.circle(mask, (mx, my), r, 1, thickness=-1)
+                clamped[mask == 1] = frame_inter[mask == 1]
 
         # 4. Temporal luminance stabilization to prevent 50Hz strobe
         if self.normalize_luminance:

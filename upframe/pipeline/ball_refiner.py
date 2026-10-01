@@ -60,24 +60,42 @@ class BallRefiner:
         if not cands_0 or not cands_1:
             return frame_inter
 
-        # Select highest circularity candidates
-        cands_0.sort(key=lambda c: c[3], reverse=True)
-        cands_1.sort(key=lambda c: c[3], reverse=True)
+        # Find genuine fast ball candidate pair.
+        # A true fast ball in F0/F1 must NOT have stationary/slow neighbors in the other frame (< 20px).
+        # Shoes, socks, and players always have matching counterparts in the adjacent frame within < 20px.
+        best_pair = None
+        best_score = -1.0
 
-        ball_0 = cands_0[0]
-        ball_1 = cands_1[0]
+        for b0 in cands_0:
+            if b0[3] < 0.48:
+                continue
+            has_close_0 = any(math.hypot(x[0] - b0[0], x[1] - b0[1]) < 20.0 for x in cands_1)
+            if has_close_0:
+                continue
 
+            for b1 in cands_1:
+                if b1[3] < 0.48:
+                    continue
+                has_close_1 = any(math.hypot(x[0] - b1[0], x[1] - b1[1]) < 20.0 for x in cands_0)
+                if has_close_1:
+                    continue
+
+                if abs(b0[2] - b1[2]) > 3.5:
+                    continue
+
+                disp = math.hypot(b1[0] - b0[0], b1[1] - b0[1])
+                if self.min_motion_threshold <= disp <= self.max_motion_threshold:
+                    score = b0[3] * b1[3]
+                    if score > best_score:
+                        best_score = score
+                        best_pair = (b0, b1, disp)
+
+        if best_pair is None:
+            return frame_inter
+
+        ball_0, ball_1, disp = best_pair
         x0, y0, r0, circ0 = ball_0
         x1, y1, r1, circ1 = ball_1
-
-        # Reject poor circularity or mismatched radius (e.g. false candidate pairs like shoe vs line)
-        if circ0 < 0.48 or circ1 < 0.48 or abs(r0 - r1) > 6.0:
-            return frame_inter
-
-        disp = math.hypot(x1 - x0, y1 - y0)
-        if disp < self.min_motion_threshold or disp > self.max_motion_threshold:
-            # Small displacement (handled well by standard optical flow) or implausible jump
-            return frame_inter
 
         # Expected position at timestep (default 0.5)
         exp_x = x0 + (x1 - x0) * timestep

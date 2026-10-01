@@ -48,3 +48,25 @@ def test_ball_refiner_instantiation():
 
     res = refiner.refine(f0, f_inter, f1, timestep=0.5)
     assert np.array_equal(res, f_inter)
+
+
+def test_ball_refiner_rejects_shoes_and_socks():
+    """Verify BallRefiner never pairs stationary player shoes/socks with balls or other socks."""
+    refiner = BallRefiner(min_motion_threshold=25.0, max_motion_threshold=160.0)
+    import cv2
+    f0 = np.full((300, 300, 3), [40, 120, 40], dtype=np.uint8)
+    f1 = np.full((300, 300, 3), [40, 120, 40], dtype=np.uint8)
+    f_inter = np.full((300, 300, 3), [40, 120, 40], dtype=np.uint8)
+
+    # Player 1's shoe at (100, 100) in F0 and (103, 100) in F1 (moves 3px)
+    cv2.circle(f0, (100, 100), 6, (240, 240, 240), -1)
+    cv2.circle(f1, (103, 100), 6, (240, 240, 240), -1)
+
+    # Real ball at (200, 100) in F0 and (202, 100) in F1 (moves 2px)
+    cv2.circle(f0, (200, 100), 6, (255, 255, 255), -1)
+    cv2.circle(f1, (202, 100), 6, (255, 255, 255), -1)
+    cv2.circle(f_inter, (201, 100), 6, (255, 255, 255), -1)
+
+    # BallRefiner must NOT pair shoe (100, 100) with ball (202, 100) across 102px jump!
+    res = refiner.refine(f0, f_inter, f1, timestep=0.5)
+    assert np.array_equal(res, f_inter)
