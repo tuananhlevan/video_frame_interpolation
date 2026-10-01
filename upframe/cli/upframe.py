@@ -3,6 +3,10 @@
 import logging
 import os
 import sys
+
+# Prevent virtual memory fragmentation in PyTorch CUDA caching allocator
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 from upframe.cli.args import parse_cli_args
 from upframe.pipeline.probe import probe_video
 from upframe.pipeline.scheduler import PipelineScheduler

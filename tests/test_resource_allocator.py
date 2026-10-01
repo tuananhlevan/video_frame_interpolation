@@ -83,7 +83,7 @@ def test_surplus_resource_optimization_a100():
 
 
 def test_surplus_resource_optimization_rtx6000_blackwell_96gb():
-    """Verify that RTX 6000 / Blackwell with 96GB VRAM scales beyond 6 workers and utilizes 50-70% VRAM."""
+    """Verify that RTX 6000 / Blackwell with 96GB VRAM allocates optimal workers (6) and safe batch size (16-24) with massive headroom."""
     mock_96gb = [
         {"index": 0, "name": "NVIDIA RTX 6000 Ada / Blackwell", "total_vram_gb": 96.0, "free_vram_gb": 92.0}
     ]
@@ -93,13 +93,10 @@ def test_surplus_resource_optimization_rtx6000_blackwell_96gb():
         devs_rife, csize_rife, info_rife = resource_allocator.calculate_optimal_allocation(
             "rife", total_frames=13151, target_resource_ratio=0.65
         )
-        # On 96GB with 64 CPU cores, workers must scale up (>= 10 workers)
-        assert len(devs_rife) >= 10, f"Workers did not scale on 96GB: {len(devs_rife)}"
-        # Batch size should scale to high throughput (>= 48 frames)
-        assert info_rife["optimal_batch_size"] >= 48, f"Batch size too low on 96GB: {info_rife['optimal_batch_size']}"
-        # Target surplus VRAM usage must fall within 50% - 70% of free VRAM
+        # On 96GB with 64 CPU cores, workers are safely capped at 6 to prevent NVENC/CPU exhaustion
+        assert len(devs_rife) >= 6, f"Workers did not reach 6 on 96GB: {len(devs_rife)}"
+        # Batch size should be safely capped between 16 and 24 frames to avoid OOM
+        assert 16 <= info_rife["optimal_batch_size"] <= 24, f"Batch size out of safe bounds [16, 24]: {info_rife['optimal_batch_size']}"
         est_vram = info_rife["estimated_vram_gb"]
-        pct_used = (est_vram / 92.0) * 100
-        assert 50.0 <= pct_used <= 70.0, f"Expected 50-70% VRAM usage, got {pct_used:.1f}% ({est_vram}GB)"
-        # Must retain at least 25GB free safety headroom
-        assert (92.0 - est_vram) >= 25.0, f"Headroom too low: {92.0 - est_vram}GB"
+        # Must retain at least 40GB free safety headroom
+        assert (92.0 - est_vram) >= 40.0, f"Headroom too low: {92.0 - est_vram}GB"

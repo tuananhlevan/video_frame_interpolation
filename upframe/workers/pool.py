@@ -2,6 +2,7 @@
 
 from concurrent.futures import Future, ThreadPoolExecutor
 import logging
+import threading
 import time
 from typing import Callable, Dict, List, Optional, Tuple
 from upframe.core.types import ChunkResult, ChunkTask
@@ -37,6 +38,10 @@ class WorkerPool:
         self.scale = scale
         self.batch_size = batch_size
         self.workers: Dict[int, GPUWorker] = {}
+        # Serialize GPU inference per physical/CUDA device to strictly bound peak activation memory
+        self.device_locks: Dict[str, threading.Lock] = {
+            dev: threading.Lock() for dev in set(self.devices) if dev.startswith("cuda")
+        }
         self._initialize_workers()
 
     def _initialize_workers(self) -> None:
@@ -52,7 +57,7 @@ class WorkerPool:
                 anti_flicker=self.anti_flicker,
                 scale=self.scale,
                 batch_size=self.batch_size,
-                device_lock=None
+                device_lock=self.device_locks.get(dev)
             )
             worker.initialize()
             self.workers[idx] = worker

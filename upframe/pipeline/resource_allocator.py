@@ -162,43 +162,34 @@ def calculate_optimal_allocation(
                     vram_per_pair = 0.75 * max(0.5, min(4.0, res_factor))
                     base_overhead = 1.0
 
-                    # Worker count per GPU: scaled to GPU tier and CPU cores
-                    if gpu["total_vram_gb"] >= 80.0:
-                        # 80GB - 96GB+ GPUs (RTX 6000 Blackwell, H100, A100 80GB)
-                        target_w = max(10, int(usable_vram // 7.0))
-                    elif gpu["total_vram_gb"] >= 40.0:
-                        # 40GB - 48GB GPUs (A100 40GB, L40S)
-                        target_w = max(6, int(usable_vram // 6.0))
+                    # Worker count per GPU: safely capped at 6 per GPU to avoid NVENC / CPU contention
+                    if gpu["total_vram_gb"] >= 40.0:
+                        target_w = 6
                     elif gpu["total_vram_gb"] >= 16.0:
-                        # 16GB - 24GB GPUs (RTX 5060 Ti, 3090, 4090)
-                        target_w = max(4, int(usable_vram // (model_vram_gb * 2.5)))
+                        target_w = 4
                     else:
-                        target_w = max(2, int(usable_vram // (model_vram_gb * 2.5)))
+                        target_w = 2
 
                     max_w = max(1, min(max_w_per_gpu_cpu, target_w))
-                    # Ensure minimum worker saturation per GPU tier if CPU cores permit
-                    if gpu["total_vram_gb"] >= 80.0 and model_key in ("rife", "auto"):
-                        max_w = max(10, min(max_cpu_workers, max_w))
-                    elif gpu["total_vram_gb"] >= 40.0 and model_key in ("rife", "auto"):
-                        max_w = max(6, min(max_cpu_workers, max_w))
+                    if gpu["total_vram_gb"] >= 40.0 and model_key in ("rife", "auto"):
+                        max_w = min(6, max(max_w, min(max_w_per_gpu_cpu, 6)))
                     elif gpu["total_vram_gb"] >= 16.0 and model_key in ("rife", "auto"):
-                        max_w = max(4, min(max_cpu_workers, max_w))
+                        max_w = min(4, max(max_w, min(max_w_per_gpu_cpu, 4)))
 
                     if user_batch_size is not None and user_batch_size > 0:
                         optimal_batch_size = user_batch_size
                     else:
                         # Auto-calculate batch size so that single-batch forward passes
-                        # utilize 50% - 70% of available GPU VRAM with guaranteed headroom
+                        # utilize safe surplus GPU VRAM with guaranteed headroom
                         fixed_overhead = base_overhead + max_w * weight_footprint
                         surplus = max(0.5, budget_vram - fixed_overhead)
                         raw_b = int(surplus / vram_per_pair)
                         
-                        # Max batch cap dynamically ensures at least 25% free headroom on any GPU size
+                        # Max batch cap dynamically ensures safe headroom on any GPU size,
+                        # capped at 24 frames maximum to prevent activation spikes and OOM.
                         max_batch_cap = max(1, int((free_vram * 0.70 - fixed_overhead) / vram_per_pair))
-                        b = min(raw_b, max_batch_cap)
-                        if b >= 32:
-                            b = (b // 8) * 8
-                        elif b >= 16:
+                        b = min(raw_b, max_batch_cap, 24)
+                        if b >= 16:
                             b = (b // 4) * 4
                         elif b >= 4:
                             b = (b // 2) * 2

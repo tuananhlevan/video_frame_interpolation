@@ -5,6 +5,9 @@ import os
 from typing import Any, Dict, List, Optional
 import yaml
 
+# Prevent virtual memory fragmentation in PyTorch CUDA caching allocator
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 
 @dataclass
 class PipelineConfig:

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -e
 
+# Prevent CUDA memory allocator fragmentation
+export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+
 # Use installed 'upframe' CLI command directly (configured via pyproject.toml: [project.scripts])
 # Fall back to python module execution if 'upframe' is not yet in PATH
 if command -v upframe &>/dev/null; then

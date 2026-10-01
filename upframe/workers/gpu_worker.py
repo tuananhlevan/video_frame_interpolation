@@ -1,5 +1,6 @@
 """Independent GPU/CPU chunk worker for parallel video frame interpolation."""
 
+from contextlib import nullcontext
 import logging
 import os
 import time
@@ -178,29 +179,29 @@ class GPUWorker:
                 if vfi_indices:
                     dev = getattr(self.model, "device", torch.device("cpu"))
                     half_mode = getattr(self.model, "half_precision", self.fp16)
-                    batch_a = frames_to_tensor_batch(pairs_to_interpolate_a, dev, half=half_mode)
-                    batch_b = frames_to_tensor_batch(pairs_to_interpolate_b, dev, half=half_mode)
+                    lock_ctx = self.device_lock if self.device_lock is not None else nullcontext()
+                    with lock_ctx:
+                        batch_a = frames_to_tensor_batch(pairs_to_interpolate_a, dev, half=half_mode)
+                        batch_b = frames_to_tensor_batch(pairs_to_interpolate_b, dev, half=half_mode)
 
-                    if self.device_lock is not None:
-                        with self.device_lock:
-                            pred_batch = self.model.interpolate_batch(
-                                batch_a, batch_b, tta=self.tta, scale=scale_val
-                            )
-                    else:
                         pred_batch = self.model.interpolate_batch(
                             batch_a, batch_b, tta=self.tta, scale=scale_val
                         )
 
-                    # 1. GPU tensor-accelerated anti-flicker envelope clamping
-                    if use_anti_flicker and self.temporal_anti_flicker is not None:
-                        pred_batch = self.temporal_anti_flicker.process_tensor(
-                            batch_a, pred_batch, batch_b
-                        )
+                        # 1. GPU tensor-accelerated anti-flicker envelope clamping
+                        if use_anti_flicker and self.temporal_anti_flicker is not None:
+                            pred_batch = self.temporal_anti_flicker.process_tensor(
+                                batch_a, pred_batch, batch_b
+                            )
 
-                    del batch_a, batch_b
+                        del batch_a, batch_b
 
-                    pred_np_frames = tensor_to_frames_batch(pred_batch)
-                    del pred_batch
+                        pred_np_frames = tensor_to_frames_batch(pred_batch)
+                        del pred_batch
+
+                        is_cuda = (hasattr(dev, "type") and dev.type == "cuda") or (isinstance(dev, str) and dev.startswith("cuda"))
+                        if is_cuda and torch.cuda.is_available():
+                            torch.cuda.empty_cache()
 
                     for k, local_idx in enumerate(vfi_indices):
                         inter_np = pred_np_frames[k]
@@ -231,6 +232,8 @@ class GPUWorker:
             encoder.finish()
 
             elapsed = time.time() - start_time
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             return ChunkResult(
                 chunk_id=task.chunk_id,
                 status="COMPLETED",
@@ -243,6 +246,8 @@ class GPUWorker:
 
         except Exception as e:
             elapsed = time.time() - start_time
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             logger.exception(f"Error processing chunk {task.chunk_id}: {e}")
             return ChunkResult(
                 chunk_id=task.chunk_id,
