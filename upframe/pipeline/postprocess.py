@@ -174,7 +174,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="UpFrame Temporal Deflicker Postprocessor")
     parser.add_argument("-i", "--input", required=True, help="Path to input 50fps/60fps video with flickering artifacts")
     parser.add_argument("-o", "--output", required=True, help="Path to cleaned output video")
-    parser.add_argument("-r", "--radius", type=int, default=10, help="Spatial search radius in pixels (default: 10)")
+    parser.add_argument("-r", "--radius", type=int, default=16, help="Spatial search radius in pixels (default: 16)")
     parser.add_argument("-m", "--margin", type=int, default=10, help="Allowed luminance margin (default: 10)")
     parser.add_argument("--outlier-margin", type=int, default=20, help="Outlier rejection margin (default: 20)")
     parser.add_argument("--device", default="cuda:0", help="CUDA device or cpu (default: cuda:0)")

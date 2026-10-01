@@ -143,3 +143,40 @@ def test_anti_flicker_normalizes_luminance():
     # 90 * 1.10 = 99
     assert cleaned.mean() > 95.0
 
+
+def test_anti_flicker_process_tensor_preserves_fast_flying_ball():
+    """Verify that process_tensor on GPU/CPU preserves high-speed balls (80px motion) without erasing them."""
+    import torch
+    import cv2
+    from upframe.utils.tensor import frames_to_tensor_batch, tensor_to_frames_batch
+
+    filter_protected = TemporalAntiFlicker(radius=10, margin=10, protect_ball=True)
+    filter_unprotected = TemporalAntiFlicker(radius=10, margin=10, protect_ball=False)
+
+    f0 = np.full((200, 200, 3), [30, 120, 80], dtype=np.uint8)
+    f1 = np.full((200, 200, 3), [30, 120, 80], dtype=np.uint8)
+    f_inter = np.full((200, 200, 3), [30, 120, 80], dtype=np.uint8)
+
+    # Ball moves 80px: from x=50 in F0 to x=130 in F1, interpolated at x=90 in F_inter
+    cv2.circle(f0, (50, 100), 6, (255, 255, 255), -1)
+    cv2.circle(f1, (130, 100), 6, (255, 255, 255), -1)
+    cv2.circle(f_inter, (90, 100), 6, (255, 255, 255), -1)
+
+    dev = torch.device("cpu")
+    t0 = frames_to_tensor_batch([f0], dev)
+    t1 = frames_to_tensor_batch([f1], dev)
+    ti = frames_to_tensor_batch([f_inter], dev)
+
+    # With protect_ball=True: Ball must be preserved (> 220)
+    t_clean_prot = filter_protected.process_tensor(t0, ti, t1)
+    np_clean_prot = tensor_to_frames_batch(t_clean_prot)[0]
+    assert np_clean_prot[100, 90, 0] > 220
+    assert np_clean_prot[100, 90, 1] > 220
+    assert np_clean_prot[100, 90, 2] > 220
+
+    # With protect_ball=False: Radius 10 cannot reach 40px away, so ball is clamped to green grass (< 100)
+    t_clean_unprot = filter_unprotected.process_tensor(t0, ti, t1)
+    np_clean_unprot = tensor_to_frames_batch(t_clean_unprot)[0]
+    assert np_clean_unprot[100, 90, 0] < 100
+
+

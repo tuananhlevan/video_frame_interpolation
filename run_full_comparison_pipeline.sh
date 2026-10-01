@@ -11,7 +11,7 @@ set -e
 # Usage:
 #   ./run_full_comparison_pipeline.sh [path/to/video.mp4] [options]
 # Options:
-#   --no-ball-refine   Disable football trajectory ball refiner (enabled by default)
+#   --ball-refine      Enable football trajectory ball refiner (disabled by default)
 #   --skip-eval        Skip final 4-layer evaluation benchmark
 #   --device <dev>     Force compute device (default: cuda:0 if available, else cpu)
 # ==============================================================================
@@ -41,7 +41,7 @@ POSTPROCESS="$PYTHON_CMD -m upframe.pipeline.postprocess"
 
 # Parse arguments
 INPUT=""
-BALL_OPT="--ball-refine"
+BALL_OPT=""
 RUN_EVAL=true
 DEVICE="cuda:0"
 
