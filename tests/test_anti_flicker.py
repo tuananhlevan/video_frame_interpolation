@@ -91,3 +91,17 @@ def test_anti_flicker_rejects_mismatched_ball_candidates():
     assert cleaned[100, 100, 0] <= 12
     assert cleaned[100, 100, 1] <= 12
     assert cleaned[100, 100, 2] <= 12
+
+
+def test_anti_flicker_normalizes_luminance():
+    filter_mod = TemporalAntiFlicker(radius=3, margin=15, protect_ball=False, normalize_luminance=True)
+    f0 = np.full((50, 50, 3), 100, dtype=np.uint8)
+    f1 = np.full((50, 50, 3), 100, dtype=np.uint8)
+    # Synthesized frame with depressed luminance
+    f_inter = np.full((50, 50, 3), 90, dtype=np.uint8)
+
+    cleaned = filter_mod.process(f0, f_inter, f1)
+    # Target luminance is 100. Scale = 100 / 90 = 1.10 (max clamp 1.10).
+    # 90 * 1.10 = 99
+    assert cleaned.mean() > 95.0
+

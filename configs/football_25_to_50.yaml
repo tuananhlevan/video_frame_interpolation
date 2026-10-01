@@ -14,8 +14,9 @@ fp16: true
 gpus: "0,1,2"
 chunk_size: 1000
 
-# Scene cut detection
+# Scene cut and broadcast transition detection
 scene_threshold: 0.35
+transition_threshold: 0.12
 
 # Encoding parameters
 crf: 18

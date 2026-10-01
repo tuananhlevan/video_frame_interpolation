@@ -28,12 +28,14 @@ class TemporalAntiFlicker:
         radius: int = 3,
         margin: int = 12,
         protect_ball: bool = True,
-        clamp_undershoot: bool = True
+        clamp_undershoot: bool = True,
+        normalize_luminance: bool = True
     ) -> None:
         self.radius = radius
         self.margin = margin
         self.protect_ball = protect_ball
         self.clamp_undershoot = clamp_undershoot
+        self.normalize_luminance = normalize_luminance
         self.kernel = cv2.getStructuringElement(
             cv2.MORPH_RECT,
             (2 * radius + 1, 2 * radius + 1)
@@ -56,7 +58,7 @@ class TemporalAntiFlicker:
             batch_1: Tensor (B, C, H, W) in [0.0, 1.0]
 
         Returns:
-            Clamped tensor (B, C, H, W) in [0.0, 1.0]
+            Clamped and luminance-stabilized tensor (B, C, H, W) in [0.0, 1.0]
         """
         import torch
         import torch.nn.functional as F
@@ -73,9 +75,21 @@ class TemporalAntiFlicker:
             min_0 = -F.max_pool2d(-batch_0, kernel_size=k, stride=1, padding=pad)
             min_1 = -F.max_pool2d(-batch_1, kernel_size=k, stride=1, padding=pad)
             lower_bound = torch.clamp(torch.minimum(min_0, min_1) - margin, 0.0, 1.0)
-            return torch.clamp(batch_inter, lower_bound, upper_bound)
+            clamped = torch.clamp(batch_inter, lower_bound, upper_bound)
         else:
-            return torch.minimum(batch_inter, upper_bound)
+            clamped = torch.minimum(batch_inter, upper_bound)
+
+        if self.normalize_luminance:
+            weights = torch.tensor([0.2126, 0.7152, 0.0722], device=clamped.device, dtype=clamped.dtype).view(1, 3, 1, 1)
+            y0 = (batch_0 * weights).sum(dim=1, keepdim=True).mean(dim=[2, 3], keepdim=True)
+            y1 = (batch_1 * weights).sum(dim=1, keepdim=True).mean(dim=[2, 3], keepdim=True)
+            y_target = 0.5 * (y0 + y1)
+            y_inter = (clamped * weights).sum(dim=1, keepdim=True).mean(dim=[2, 3], keepdim=True)
+            scale = torch.where(y_inter > 1e-4, y_target / torch.clamp(y_inter, min=1e-4), torch.ones_like(y_target))
+            scale = torch.clamp(scale, 0.90, 1.10)
+            clamped = torch.clamp(clamped * scale, 0.0, 1.0)
+
+        return clamped
 
     def process(
         self,
@@ -131,5 +145,16 @@ class TemporalAntiFlicker:
                         mask = np.zeros(frame_inter.shape[:2], dtype=np.uint8)
                         cv2.circle(mask, (mx, my), r, 1, thickness=-1)
                         clamped[mask == 1] = frame_inter[mask == 1]
+
+        # 4. Temporal luminance stabilization to prevent 50Hz strobe
+        if self.normalize_luminance:
+            weights = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+            y0 = np.tensordot(frame_0.astype(np.float32), weights, axes=([2], [0])).mean()
+            y1 = np.tensordot(frame_1.astype(np.float32), weights, axes=([2], [0])).mean()
+            y_target = 0.5 * (y0 + y1)
+            y_inter = np.tensordot(clamped.astype(np.float32), weights, axes=([2], [0])).mean()
+            if y_inter > 1e-3:
+                scale = np.clip(y_target / y_inter, 0.90, 1.10)
+                clamped = np.clip(np.round(clamped.astype(np.float32) * scale), 0, 255).astype(np.uint8)
 
         return clamped

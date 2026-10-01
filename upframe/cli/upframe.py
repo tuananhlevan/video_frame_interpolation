@@ -70,6 +70,7 @@ def main() -> int:
         gpus=config.gpus,
         chunk_size=config.chunk_size,
         scene_threshold=config.scene_threshold,
+        transition_threshold=config.transition_threshold,
         temp_dir=config.temp_dir,
         checkpoint_path=config.weights,
         crf=config.crf,

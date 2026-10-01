@@ -88,6 +88,7 @@ class ChunkTask:
     device: str = "cuda:0"
     checkpoint_path: Optional[str] = None
     scene_threshold: float = 0.35
+    transition_threshold: float = 0.12
     fp16: bool = True
     color_space: Optional[str] = None
     color_primaries: Optional[str] = None

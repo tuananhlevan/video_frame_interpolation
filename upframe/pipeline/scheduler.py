@@ -30,6 +30,7 @@ class PipelineScheduler:
         gpus: Optional[List[int]] = None,
         chunk_size: Optional[int] = None,
         scene_threshold: float = 0.35,
+        transition_threshold: float = 0.12,
         temp_dir: Optional[str] = None,
         checkpoint_path: Optional[str] = None,
         crf: int = 18,
@@ -54,6 +55,7 @@ class PipelineScheduler:
         self.model_name = model_name
         self.chunk_size = chunk_size
         self.scene_threshold = scene_threshold
+        self.transition_threshold = transition_threshold
         self.checkpoint_path = checkpoint_path
         self.crf = crf
         self.preset = preset
@@ -172,6 +174,7 @@ class PipelineScheduler:
                     model_name=self.model_name,
                     checkpoint_path=self.checkpoint_path,
                     scene_threshold=self.scene_threshold,
+                    transition_threshold=self.transition_threshold,
                     fp16=self.fp16,
                     color_space=self.metadata.color_space,
                     color_primaries=self.metadata.color_primaries,

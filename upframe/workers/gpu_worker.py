@@ -5,6 +5,7 @@ import logging
 import os
 import time
 from typing import Any, List, Optional
+import cv2
 import numpy as np
 from upframe.core.types import ChunkResult, ChunkTask
 from upframe.models.base import BaseVFIModel, ModelRegistry
@@ -13,7 +14,7 @@ from upframe.pipeline.ball_refiner import BallRefiner
 from upframe.pipeline.cadence import is_duplicate_frame
 from upframe.pipeline.decode import VideoDecoder
 from upframe.pipeline.encode import VideoEncoder
-from upframe.pipeline.scene_detect import is_scene_cut
+from upframe.pipeline.scene_detect import compute_frame_difference, is_scene_cut
 
 logger = logging.getLogger(__name__)
 
@@ -166,9 +167,14 @@ class GPUWorker:
                     f_next = source_frames[j + 1]
                     local_idx = j - i
 
-                    if is_scene_cut(f_curr, f_next, threshold=task.scene_threshold):
+                    diff = compute_frame_difference(f_curr, f_next)
+                    if diff >= task.scene_threshold:
                         scene_cuts += 1
                         results[local_idx] = f_curr
+                    elif diff >= getattr(task, "transition_threshold", 0.12):
+                        # Broadcast graphic wipe / 3D stinger / cross-dissolve:
+                        # Linear blend produces clean, flicker-free broadcast transition
+                        results[local_idx] = cv2.addWeighted(f_curr, 0.5, f_next, 0.5, 0)
                     elif use_cadence and is_duplicate_frame(f_curr, f_next):
                         results[local_idx] = f_curr
                     else:

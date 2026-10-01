@@ -75,3 +75,11 @@ def test_bwdif_and_deinterlace_args():
     ])
     assert config2.model == "auto"
     assert config2.deinterlace == "auto"
+
+
+def test_transition_threshold_args():
+    inp, out, config = parse_cli_args([
+        "match.mp4", "output.mp4",
+        "--transition-threshold", "0.15"
+    ])
+    assert config.transition_threshold == 0.15

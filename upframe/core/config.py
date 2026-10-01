@@ -16,6 +16,7 @@ class PipelineConfig:
     gpus: Optional[List[int]] = None
     chunk_size: Optional[int] = None
     scene_threshold: float = 0.35
+    transition_threshold: float = 0.12
     crf: int = 18
     preset: str = "medium"
     use_nvenc: Optional[bool] = None

@@ -74,6 +74,22 @@ def is_scene_cut(
     return diff >= threshold
 
 
+def is_broadcast_transition(
+    frame_a: Union[np.ndarray, torch.Tensor],
+    frame_b: Union[np.ndarray, torch.Tensor],
+    transition_threshold: float = 0.12,
+    scene_threshold: float = 0.35
+) -> bool:
+    """Returns True if the frame pair is a broadcast graphic wipe, 3D stinger, or dissolve.
+
+    Neural optical flow models (RIFE, AMT, EMA-VFI) cannot model 3D non-rigid graphic overlays
+    and flying polygons, causing severe tearing, shattered checkerboards, and strobe flashes.
+    Linear blending for transitions preserves broadcast smoothness with zero artifacts.
+    """
+    diff = compute_frame_difference(frame_a, frame_b)
+    return transition_threshold <= diff < scene_threshold
+
+
 def detect_cuts(
     frames: List[Union[np.ndarray, torch.Tensor]],
     threshold: float = 0.35

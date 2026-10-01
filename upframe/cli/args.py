@@ -45,6 +45,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--scene-threshold", type=float, default=0.35,
                         help="Scene cut sensitivity threshold [0.0 - 1.0] (default: 0.35)")
+    parser.add_argument("--transition-threshold", type=float, default=0.12,
+                        help="Broadcast graphic wipe/dissolve transition sensitivity threshold [0.0 - 1.0] (default: 0.12)")
     parser.add_argument("--weights", default=None, help="Path to pretrained model checkpoint")
     parser.add_argument("--crf", type=int, default=18, help="FFmpeg H.264 CRF quality level (default: 18)")
     parser.add_argument("--preset", default="medium", help="FFmpeg encoding preset (default: medium)")
@@ -120,6 +122,8 @@ def parse_cli_args(args_list: Optional[List[str]] = None) -> Tuple[str, str, Pip
         config.chunk_size = args.chunk_size
     if args.scene_threshold != 0.35 or not args.config:
         config.scene_threshold = args.scene_threshold
+    if args.transition_threshold != 0.12 or not args.config:
+        config.transition_threshold = args.transition_threshold
     if args.crf != 18 or not args.config:
         config.crf = args.crf
     if args.preset != "medium" or not args.config:
