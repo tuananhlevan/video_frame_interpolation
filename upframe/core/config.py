@@ -38,6 +38,7 @@ class PipelineConfig:
     anti_flicker: bool = False
     batch_size: Optional[int] = None
     target_resource_ratio: float = 0.65
+    post_deflicker: bool = False
 
 
     @classmethod

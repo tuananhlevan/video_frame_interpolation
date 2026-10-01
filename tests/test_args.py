@@ -83,3 +83,11 @@ def test_transition_threshold_args():
         "--transition-threshold", "0.15"
     ])
     assert config.transition_threshold == 0.15
+
+
+def test_post_deflicker_args():
+    inp, out, config = parse_cli_args([
+        "match.mp4", "output.mp4",
+        "--post-deflicker"
+    ])
+    assert config.post_deflicker is True

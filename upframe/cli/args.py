@@ -67,6 +67,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Enable slow-motion duplicate-frame cadence filter")
     parser.add_argument("--anti-flicker", dest="anti_flicker", action="store_true", default=False,
                         help="Enable temporal anti-flicker envelope clamping to eliminate white firefly spikes")
+    parser.add_argument("--post-deflicker", dest="post_deflicker", action="store_true", default=False,
+                        help="Run integrated GPU temporal deflicker pass on output video to eliminate firefly spikes")
     parser.add_argument("--batch-size", "-b", type=int, default=None,
                         help="Inference batch size per worker (default: auto-calculated to optimize 50-70% surplus GPU VRAM)")
     parser.add_argument("--target-resource-ratio", type=float, default=0.65,
@@ -145,6 +147,7 @@ def parse_cli_args(args_list: Optional[List[str]] = None) -> Tuple[str, str, Pip
     config.ball_refine = args.ball_refine
     config.cadence_filter = args.cadence_filter
     config.anti_flicker = args.anti_flicker
+    config.post_deflicker = args.post_deflicker
     if args.batch_size is not None:
         config.batch_size = max(1, args.batch_size)
     if args.target_resource_ratio is not None:

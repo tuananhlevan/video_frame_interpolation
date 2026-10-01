@@ -48,7 +48,8 @@ class PipelineScheduler:
         ball_refine: bool = False,
         cadence_filter: bool = False,
         anti_flicker: bool = False,
-        scale: float = 1.0
+        scale: float = 1.0,
+        post_deflicker: bool = False
     ) -> None:
         self.metadata = metadata
         self.output_filepath = os.path.abspath(output_filepath)
@@ -73,6 +74,7 @@ class PipelineScheduler:
         self.cadence_filter = cadence_filter
         self.anti_flicker = anti_flicker
         self.scale = scale
+        self.post_deflicker = post_deflicker
 
         output_stem = os.path.splitext(os.path.basename(self.output_filepath))[0]
 
@@ -279,6 +281,32 @@ class PipelineScheduler:
                 except Exception:
                     pass
             raise
+
+        # Step 2.5: Optional integrated postprocess deflickering pass
+        if self.post_deflicker:
+            logger.info("Executing integrated postprocess deflickering pass on merged output...")
+            temp_merged = self.output_filepath + ".pre_deflicker.mp4"
+            if os.path.exists(self.output_filepath):
+                try:
+                    os.rename(self.output_filepath, temp_merged)
+                    from upframe.pipeline.postprocess import deflicker_video
+                    dev_str = self.devices[0] if self.devices else "cuda:0"
+                    success = deflicker_video(
+                        input_path=temp_merged,
+                        output_path=self.output_filepath,
+                        device=dev_str,
+                        use_nvenc=self.use_nvenc,
+                        crf=self.crf,
+                        preset=self.preset
+                    )
+                    if success and os.path.exists(temp_merged):
+                        os.remove(temp_merged)
+                except Exception as e:
+                    logger.warning(f"Integrated post-deflicker encountered error: {e}. Reverting to original output.")
+                    if os.path.exists(temp_merged):
+                        if os.path.exists(self.output_filepath):
+                            os.remove(self.output_filepath)
+                        os.rename(temp_merged, self.output_filepath)
 
         # Step 3: Reporting & Summary
         total_proc_time = time.time() - start_time

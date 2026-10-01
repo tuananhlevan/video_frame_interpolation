@@ -86,7 +86,8 @@ def main() -> int:
         ball_refine=config.ball_refine,
         cadence_filter=config.cadence_filter,
         anti_flicker=config.anti_flicker,
-        scale=config.scale
+        scale=config.scale,
+        post_deflicker=config.post_deflicker
     )
 
     try:
