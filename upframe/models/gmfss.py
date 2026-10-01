@@ -42,6 +42,88 @@ _CACHE_WEIGHT_DIR = os.path.expanduser("~/.cache/upframe/gmfss/train_log")
 
 from upframe.models.weights import resolve_checkpoint
 
+def _ensure_backbone() -> str:
+    """Ensures GMFSS backbone files exist, auto-initializing submodule or cloning if missing."""
+    target_dir = _BACKBONE_DIR
+    target_file = os.path.join(target_dir, "model", "GMFSS_infer_b.py")
+    if os.path.isfile(target_file):
+        return target_dir
+
+    repo_root = os.path.abspath(os.path.join(target_dir, "..", ".."))
+
+    # 1. Try git submodule update from repo root
+    try:
+        logger.info(f"GMFSS backbone not found at {target_dir}. Attempting git submodule update...")
+        import subprocess
+        subprocess.run(
+            ["git", "submodule", "update", "--init", "--recursive", "backbones/gmfss"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=120
+        )
+        if os.path.isfile(target_file):
+            logger.info("Successfully initialized GMFSS submodule.")
+            return target_dir
+    except Exception as e:
+        logger.warning(f"git submodule update failed: {e}")
+
+    # 2. Try git clone directly into target_dir if target_dir is empty or broken
+    try:
+        import subprocess
+        logger.info(f"Cloning GMFSS source code into {target_dir}...")
+        is_empty_or_broken = True
+        if os.path.exists(target_dir):
+            entries = [e for e in os.listdir(target_dir) if e not in (".git", "__pycache__")]
+            if entries:
+                is_empty_or_broken = False
+
+        if is_empty_or_broken:
+            import shutil
+            if os.path.exists(target_dir):
+                shutil.rmtree(target_dir, ignore_errors=True)
+            subprocess.run(
+                ["git", "clone", "--depth", "1", "https://github.com/98mxr/GMFSS_Fortuna.git", target_dir],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=180
+            )
+            if os.path.isfile(target_file):
+                logger.info("Successfully cloned GMFSS into backbones/gmfss.")
+                return target_dir
+    except Exception as e:
+        logger.warning(f"Direct clone to {target_dir} failed ({e}). Trying cache directory...")
+
+    # 3. Fallback to cache directory
+    cache_dir = os.path.expanduser("~/.cache/upframe/backbones/gmfss")
+    if os.path.isfile(os.path.join(cache_dir, "model", "GMFSS_infer_b.py")):
+        return cache_dir
+
+    try:
+        import subprocess
+        os.makedirs(os.path.dirname(cache_dir), exist_ok=True)
+        subprocess.run(
+            ["git", "clone", "--depth", "1", "https://github.com/98mxr/GMFSS_Fortuna.git", cache_dir],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=180
+        )
+        if os.path.isfile(os.path.join(cache_dir, "model", "GMFSS_infer_b.py")):
+            logger.info(f"Successfully cloned GMFSS into {cache_dir}.")
+            return cache_dir
+    except Exception as e:
+        logger.warning(f"Cloning to cache failed: {e}")
+
+    raise FileNotFoundError(
+        f"GMFSS backbone files not found in {target_dir}.\n"
+        f"Please run in your terminal or Colab notebook:\n"
+        f"    git submodule update --init --recursive backbones/gmfss"
+    )
+
+
 def _find_weight_dir(explicit: Optional[str] = None) -> Optional[str]:
     """Return weight directory that contains all 4 GMFSS pkl files, auto-downloading if missing."""
     return resolve_checkpoint("gmfss", explicit)
@@ -92,6 +174,8 @@ class GMFSSModel(BaseVFIModel):
 
         self._scale = scale
 
+        backbone_dir = _ensure_backbone()
+
         # Ensure clean namespace for GMFSS 'model' package
         for mod in list(sys.modules.keys()):
             if mod == "model" or mod.startswith("model."):
@@ -99,12 +183,12 @@ class GMFSSModel(BaseVFIModel):
 
         # Evict other backbones from sys.path and prioritize GMFSS
         sys.path = [p for p in sys.path if not any(p.endswith(os.path.join("backbones", b)) for b in ("ema_vfi", "rife", "amt", "film", "ifrnet"))]
-        if _BACKBONE_DIR in sys.path:
-            sys.path.remove(_BACKBONE_DIR)
-        sys.path.insert(0, _BACKBONE_DIR)
+        if backbone_dir in sys.path:
+            sys.path.remove(backbone_dir)
+        sys.path.insert(0, backbone_dir)
 
         # Ensure model/__init__.py exists so GMFSS model directory is recognized as a package
-        init_file = os.path.join(_BACKBONE_DIR, "model", "__init__.py")
+        init_file = os.path.join(backbone_dir, "model", "__init__.py")
         if not os.path.exists(init_file):
             try:
                 open(init_file, "a").close()

@@ -17,6 +17,7 @@ dependencies = [
     "opencv-python-headless",
     "requests",
     "gdown",
+    "timm",
 ]
 
 [project.scripts]

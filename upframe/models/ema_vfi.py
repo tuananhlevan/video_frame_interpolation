@@ -50,17 +50,100 @@ def _find_ckpt(variant: str, explicit: Optional[str] = None) -> Optional[str]:
     return resolve_checkpoint(variant, explicit)
 
 
+def _ensure_backbone() -> str:
+    """Ensures EMA-VFI backbone files exist, auto-initializing submodule or cloning if missing."""
+    target_dir = _BACKBONE_DIR
+    if os.path.isfile(os.path.join(target_dir, "config.py")) and os.path.isfile(os.path.join(target_dir, "Trainer.py")):
+        return target_dir
+
+    repo_root = os.path.abspath(os.path.join(target_dir, "..", ".."))
+
+    # 1. Try git submodule update from repo root
+    try:
+        logger.info(f"EMA-VFI backbone not found at {target_dir}. Attempting git submodule update...")
+        import subprocess
+        subprocess.run(
+            ["git", "submodule", "update", "--init", "--recursive", "backbones/ema_vfi"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=120
+        )
+        if os.path.isfile(os.path.join(target_dir, "config.py")) and os.path.isfile(os.path.join(target_dir, "Trainer.py")):
+            logger.info("Successfully initialized EMA-VFI submodule.")
+            return target_dir
+    except Exception as e:
+        logger.warning(f"git submodule update failed: {e}")
+
+    # 2. Try git clone directly into target_dir if target_dir is empty or broken
+    try:
+        import subprocess
+        logger.info(f"Cloning EMA-VFI source code into {target_dir}...")
+        is_empty_or_broken = True
+        if os.path.exists(target_dir):
+            entries = [e for e in os.listdir(target_dir) if e not in (".git", "__pycache__")]
+            if entries:
+                is_empty_or_broken = False
+
+        if is_empty_or_broken:
+            import shutil
+            if os.path.exists(target_dir):
+                shutil.rmtree(target_dir, ignore_errors=True)
+            subprocess.run(
+                ["git", "clone", "--depth", "1", "https://github.com/MCG-NJU/EMA-VFI.git", target_dir],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=180
+            )
+            if os.path.isfile(os.path.join(target_dir, "config.py")):
+                logger.info("Successfully cloned EMA-VFI into backbones/ema_vfi.")
+                return target_dir
+    except Exception as e:
+        logger.warning(f"Direct clone to {target_dir} failed ({e}). Trying cache directory...")
+
+    # 3. Fallback to cache directory ~/.cache/upframe/backbones/ema_vfi
+    cache_dir = os.path.expanduser("~/.cache/upframe/backbones/ema_vfi")
+    if os.path.isfile(os.path.join(cache_dir, "config.py")) and os.path.isfile(os.path.join(cache_dir, "Trainer.py")):
+        return cache_dir
+
+    try:
+        import subprocess
+        os.makedirs(os.path.dirname(cache_dir), exist_ok=True)
+        subprocess.run(
+            ["git", "clone", "--depth", "1", "https://github.com/MCG-NJU/EMA-VFI.git", cache_dir],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=180
+        )
+        if os.path.isfile(os.path.join(cache_dir, "config.py")):
+            logger.info(f"Successfully cloned EMA-VFI into {cache_dir}.")
+            return cache_dir
+    except Exception as e:
+        logger.warning(f"Cloning to cache failed: {e}")
+
+    raise FileNotFoundError(
+        f"EMA-VFI backbone files (config.py, Trainer.py) not found in {target_dir}.\n"
+        f"Please run in your terminal or Colab notebook:\n"
+        f"    git submodule update --init --recursive backbones/ema_vfi"
+    )
+
+
 def _make_model(variant: str) -> Any:
     """Instantiate the EMA-VFI `Model` for the given variant.
 
     We import `config` and `Trainer` from the backbone directory so we can
     reconfigure MODEL_CONFIG before instantiation (large vs. small).
     """
+    backbone_dir = _ensure_backbone()
+
     # Evict other backbones from sys.path and prioritize EMA-VFI
     sys.path = [p for p in sys.path if not any(p.endswith(os.path.join("backbones", b)) for b in ("gmfss", "rife", "amt", "film", "ifrnet"))]
-    if _BACKBONE_DIR in sys.path:
-        sys.path.remove(_BACKBONE_DIR)
-    sys.path.insert(0, _BACKBONE_DIR)
+    if backbone_dir in sys.path:
+        sys.path.remove(backbone_dir)
+    sys.path.insert(0, backbone_dir)
 
     # Force reimport so patched MODEL_CONFIG and model modules take effect
     for mod in list(sys.modules.keys()):
