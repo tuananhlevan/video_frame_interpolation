@@ -150,11 +150,44 @@ def calculate_optimal_allocation(
 
                 if model_vram_gb >= 5.0:
                     # Heavy models (e.g. AMT-G, AMT-L, EMA-VFI, GMFSS):
-                    # Cap concurrent workers per GPU at 6 to prevent context thrashing and VRAM bloat
-                    max_w = min(6, max(1, int(usable_vram // model_vram_gb)))
+                    # Peak VRAM is gated by device_lock (Semaphore per GPU):
+                    # - On >= 80GB GPUs: concurrency = 2
+                    # - On < 80GB GPUs: concurrency = 1
+                    # Workers alternate CPU decode/encode and GPU inference.
+                    # Idle workers only hold static weights (~0.5GB VRAM).
+                    concurrency = 2 if gpu["total_vram_gb"] >= 80.0 else 1
+                    idle_weight_gb = 0.50
+                    base_overhead = 0.80
+
+                    # 1) Direct full-concurrency capacity based on usable VRAM:
+                    concurrent_w = int(usable_vram // model_vram_gb)
+
+                    # 2) Dynamic tier ceilings:
+                    # - >= 80GB (Blackwell / RTX 6000 96GB): 8 workers (concurrency=2)
+                    # - >= 40GB (L40S 48GB, A100 40GB): 6 workers
+                    # - >= 15GB (RTX 5060 Ti / 4080 16GB): 2 workers (pipelined double-buffering)
+                    # - < 15GB (8-12GB GPUs): 1 worker
+                    if gpu["total_vram_gb"] >= 80.0:
+                        tier_cap = 8
+                        target_w = max(concurrent_w, 8)
+                    elif gpu["total_vram_gb"] >= 40.0:
+                        tier_cap = 6
+                        target_w = min(tier_cap, max(concurrent_w, 3))
+                    elif gpu["total_vram_gb"] >= 15.0:
+                        tier_cap = 2
+                        target_w = 2
+                    else:
+                        tier_cap = 1
+                        target_w = 1
+
+                    max_w = max(1, min(tier_cap, target_w))
                     optimal_batch_size = user_batch_size or 1
-                    cost_per_w = model_vram_gb
-                    total_est_vram_gb += max_w * cost_per_w
+
+                    # Accurate VRAM estimation accounting for device_lock serialization:
+                    active_w = min(max_w, concurrency)
+                    idle_w = max(0, max_w - active_w)
+                    cost_per_gpu = active_w * model_vram_gb + idle_w * idle_weight_gb + base_overhead
+                    total_est_vram_gb += min(usable_vram, cost_per_gpu)
                 else:
                     # Light / Medium models (e.g. RIFE, Blend, IFRNet, EMA-VFI-s):
                     # Co-optimize concurrent workers AND batch size to safely utilize 50% - 70% surplus VRAM
@@ -162,17 +195,21 @@ def calculate_optimal_allocation(
                     vram_per_pair = 0.75 * max(0.5, min(4.0, res_factor))
                     base_overhead = 1.0
 
-                    # Worker count per GPU: safely capped at 6 per GPU to avoid NVENC / CPU contention
-                    if gpu["total_vram_gb"] >= 40.0:
-                        target_w = 6
+                    # Worker count per GPU: dynamically scaled by GPU VRAM tier and CPU cores
+                    if gpu["total_vram_gb"] >= 80.0:
+                        target_w = 10
+                    elif gpu["total_vram_gb"] >= 40.0:
+                        target_w = 8
                     elif gpu["total_vram_gb"] >= 16.0:
                         target_w = 4
                     else:
                         target_w = 2
 
                     max_w = max(1, min(max_w_per_gpu_cpu, target_w))
-                    if gpu["total_vram_gb"] >= 40.0 and model_key in ("rife", "auto"):
-                        max_w = min(6, max(max_w, min(max_w_per_gpu_cpu, 6)))
+                    if gpu["total_vram_gb"] >= 80.0 and model_key in ("rife", "auto"):
+                        max_w = min(10, max(max_w, min(max_w_per_gpu_cpu, 10)))
+                    elif gpu["total_vram_gb"] >= 40.0 and model_key in ("rife", "auto"):
+                        max_w = min(8, max(max_w, min(max_w_per_gpu_cpu, 8)))
                     elif gpu["total_vram_gb"] >= 16.0 and model_key in ("rife", "auto"):
                         max_w = min(4, max(max_w, min(max_w_per_gpu_cpu, 4)))
 

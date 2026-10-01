@@ -7,10 +7,11 @@ def test_single_gpu_allocation_5060ti():
         {'index': 0, 'name': 'NVIDIA GeForce RTX 5060 Ti', 'total_vram_gb': 16.0, 'free_vram_gb': 15.0}
     ]
     with patch.object(resource_allocator, 'get_gpu_info', return_value=mock_gpu):
-        # 1. AMT-G (12.5GB) should get exactly 1 worker
+        # 1. AMT-G (12.5GB) gets 2 pipelined workers on 16GB GPU (concurrency=1 via Semaphore,
+        # overlapping CPU decode/encode with GPU forward pass to eliminate GPU idle starvation)
         devs_amt, csize_amt, info_amt = resource_allocator.calculate_optimal_allocation("amt-g", total_frames=751)
-        assert len(devs_amt) == 1
-        assert devs_amt == ["cuda:0"]
+        assert len(devs_amt) == 2
+        assert devs_amt == ["cuda:0", "cuda:0"]
         assert csize_amt > 100
 
         # 2. EMA-VFI (5.2GB) should get 2 workers on 16GB
@@ -83,20 +84,27 @@ def test_surplus_resource_optimization_a100():
 
 
 def test_surplus_resource_optimization_rtx6000_blackwell_96gb():
-    """Verify that RTX 6000 / Blackwell with 96GB VRAM allocates optimal workers (6) and safe batch size (16-24) with massive headroom."""
+    """Verify that RTX 6000 / Blackwell with 96GB VRAM allocates optimal workers (8-10) and safe batch size (16-24) with massive headroom."""
     mock_96gb = [
         {"index": 0, "name": "NVIDIA RTX 6000 Ada / Blackwell", "total_vram_gb": 96.0, "free_vram_gb": 92.0}
     ]
     with patch.object(resource_allocator, "get_gpu_info", return_value=mock_96gb), \
          patch.object(resource_allocator, "get_system_ram_gb", return_value=128.0), \
          patch("os.cpu_count", return_value=64):
+        # RIFE dynamically scales up to 10 workers on 96GB Blackwell
         devs_rife, csize_rife, info_rife = resource_allocator.calculate_optimal_allocation(
             "rife", total_frames=13151, target_resource_ratio=0.65
         )
-        # On 96GB with 64 CPU cores, workers are safely capped at 6 to prevent NVENC/CPU exhaustion
-        assert len(devs_rife) >= 6, f"Workers did not reach 6 on 96GB: {len(devs_rife)}"
+        assert len(devs_rife) == 10, f"Expected 10 workers for RIFE on 96GB Blackwell, got {len(devs_rife)}"
         # Batch size should be safely capped between 16 and 24 frames to avoid OOM
         assert 16 <= info_rife["optimal_batch_size"] <= 24, f"Batch size out of safe bounds [16, 24]: {info_rife['optimal_batch_size']}"
         est_vram = info_rife["estimated_vram_gb"]
         # Must retain at least 40GB free safety headroom
         assert (92.0 - est_vram) >= 40.0, f"Headroom too low: {92.0 - est_vram}GB"
+
+        # AMT-G dynamically scales up to 8 workers on 96GB Blackwell
+        devs_amt, csize_amt, info_amt = resource_allocator.calculate_optimal_allocation(
+            "amt-g", total_frames=13151, target_resource_ratio=0.65
+        )
+        assert len(devs_amt) == 8, f"Expected 8 workers for AMT-G on 96GB Blackwell, got {len(devs_amt)}"
+        assert (92.0 - info_amt["estimated_vram_gb"]) >= 40.0, f"Headroom too low for AMT-G: {92.0 - info_amt['estimated_vram_gb']}GB"
