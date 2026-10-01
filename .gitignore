@@ -4,6 +4,7 @@
 *.avi
 *.mkv
 *.webm
+Screenshot*.png
 
 # Logs and outputs
 upframe_log/

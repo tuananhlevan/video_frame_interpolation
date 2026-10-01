@@ -25,14 +25,16 @@ class TemporalAntiFlicker:
 
     def __init__(
         self,
-        radius: int = 16,
-        margin: int = 12,
+        radius: int = 10,
+        margin: int = 10,
+        outlier_margin: int = 20,
         protect_ball: bool = True,
         clamp_undershoot: bool = True,
         normalize_luminance: bool = True
     ) -> None:
         self.radius = radius
         self.margin = margin
+        self.outlier_margin = outlier_margin
         self.protect_ball = protect_ball
         self.clamp_undershoot = clamp_undershoot
         self.normalize_luminance = normalize_luminance
@@ -50,10 +52,10 @@ class TemporalAntiFlicker:
         """Clamps batch_inter within the local spatial-temporal envelope on GPU.
 
         Uses 1D separable max/min pooling (horizontal then vertical) to execute
-        in <1.8ms on GPU while covering physical player limb motion (radius=16,
-        equivalent to 33x33 window). Guarantees that moving white socks and shoes
+        in <1.8ms on GPU while covering physical player limb motion (radius=10,
+        equivalent to 21x21 window). Guarantees that moving white socks and shoes
         are never clipped into green grass noise, while eliminating isolated white
-        firefly spikes.
+        firefly spikes and synthesizing seamless ground truth background for severe outliers.
 
         Args:
             batch_0: Tensor (B, C, H, W) in [0.0, 1.0]
@@ -86,6 +88,15 @@ class TemporalAntiFlicker:
             clamped = torch.clamp(batch_inter, lower_bound, upper_bound)
         else:
             clamped = torch.minimum(batch_inter, upper_bound)
+
+        # Severe outlier spark/firefly suppression:
+        # If a synthesized pixel deviates beyond the dilated envelope by outlier_margin,
+        # it is unphysical temporal impulse noise (firefly spike / optical flow explosion).
+        # Seamlessly restore using clean linear interpolation of genuine source frames.
+        outlier_delta = self.outlier_margin / 255.0
+        t_blend = 0.5 * (batch_0 + batch_1)
+        is_severe_outlier = (batch_inter > upper_bound + outlier_delta) | (batch_inter < lower_bound - outlier_delta)
+        clamped = torch.where(is_severe_outlier, t_blend, clamped)
 
         if self.normalize_luminance:
             weights = torch.tensor([0.2126, 0.7152, 0.0722], device=clamped.device, dtype=clamped.dtype).view(1, 3, 1, 1)
@@ -132,6 +143,14 @@ class TemporalAntiFlicker:
             clamped = np.clip(frame_inter, lower_bound, upper_bound)
         else:
             clamped = np.minimum(frame_inter, upper_bound)
+
+        # Severe outlier spark/firefly suppression:
+        outlier_m = np.int16(self.outlier_margin)
+        is_severe = (frame_inter.astype(np.int16) > upper_bound.astype(np.int16) + outlier_m) | \
+                    (frame_inter.astype(np.int16) < lower_bound.astype(np.int16) - outlier_m)
+        if np.any(is_severe):
+            t_blend = np.clip(0.5 * frame_0.astype(np.float32) + 0.5 * frame_1.astype(np.float32), 0, 255).astype(np.uint8)
+            clamped[is_severe] = t_blend[is_severe]
 
         # 3. Protect ball region from envelope clamping
         if ball_mask is not None and np.any(ball_mask):

@@ -11,6 +11,8 @@ from upframe.pipeline.state import StateStore
 from upframe.pipeline.merge import ChunkMerger
 from upframe.pipeline.qc import validate_output
 from upframe.pipeline.scheduler import PipelineScheduler
+from upframe.pipeline.anti_flicker import TemporalAntiFlicker
+from upframe.pipeline.postprocess import deflicker_video
 from upframe.utils.ffmpeg import format_duration, is_nvenc_available
 
 __all__ = [
@@ -32,4 +34,6 @@ __all__ = [
     "validate_output",
     "format_duration",
     "PipelineScheduler",
+    "TemporalAntiFlicker",
+    "deflicker_video",
 ]

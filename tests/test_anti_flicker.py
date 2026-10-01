@@ -75,8 +75,26 @@ def test_anti_flicker_process_tensor_matches_numpy():
 
 def test_anti_flicker_default_margin():
     filter_mod = TemporalAntiFlicker()
-    assert filter_mod.margin == 12
-    assert filter_mod.radius == 16
+    assert filter_mod.margin == 10
+    assert filter_mod.radius == 10
+    assert filter_mod.outlier_margin == 20
+
+
+def test_anti_flicker_suppresses_severe_outliers():
+    """Verify that artificial ghost blobs or severe firefly sparks are restored to clean background blend."""
+    filter_mod = TemporalAntiFlicker(radius=10, margin=10, outlier_margin=20, protect_ball=False)
+    # Dark green pitch background [30, 120, 80]
+    f0 = np.full((100, 100, 3), [30, 120, 80], dtype=np.uint8)
+    f1 = np.full((100, 100, 3), [30, 120, 80], dtype=np.uint8)
+    
+    # Severe synthesis ghost blob / white flash in intermediate frame at (50, 50)
+    f_inter = np.full((100, 100, 3), [30, 120, 80], dtype=np.uint8)
+    f_inter[45:55, 45:55] = [200, 240, 200]  # Bright flash blob
+    
+    cleaned = filter_mod.process(f0, f_inter, f1)
+    
+    # Severe outlier blob must be completely replaced by ground truth background [30, 120, 80]
+    assert np.all(cleaned[45:55, 45:55] == [30, 120, 80])
 
 
 def test_anti_flicker_preserves_fast_moving_socks():
