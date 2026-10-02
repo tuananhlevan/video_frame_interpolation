@@ -142,66 +142,66 @@ $POSTPROCESS \
 
 echo "[Stage 1/3] RIFE finished -> Clean output: $CLEAN_RIFE ($(date))"
 
-# ------------------------------------------------------------------------------
-# 2. AMT-G
-# ------------------------------------------------------------------------------
-echo ""
-echo "=========================================================="
-echo "[Stage 2/3] AMT-G: All-Pairs Multi-Scale Motion Attention"
-echo "=========================================================="
-RAW_AMTG="${INPUT_STEM}_amtg_raw.mp4"
-CLEAN_AMTG="${INPUT_STEM}_amtg_clean.mp4"
+# # ------------------------------------------------------------------------------
+# # 2. AMT-G
+# # ------------------------------------------------------------------------------
+# echo ""
+# echo "=========================================================="
+# echo "[Stage 2/3] AMT-G: All-Pairs Multi-Scale Motion Attention"
+# echo "=========================================================="
+# RAW_AMTG="${INPUT_STEM}_amtg_raw.mp4"
+# CLEAN_AMTG="${INPUT_STEM}_amtg_clean.mp4"
 
-$UPFRAME "$INPUT" "$RAW_AMTG" \
-    --model amt-g \
-    $NVENC_OPT \
-    $BALL_OPT \
-    --cadence-filter \
-    --anti-flicker \
-    --resume
+# $UPFRAME "$INPUT" "$RAW_AMTG" \
+#     --model amt-g \
+#     $NVENC_OPT \
+#     $BALL_OPT \
+#     --cadence-filter \
+#     --anti-flicker \
+#     --resume
 
-echo "[Stage 2/3] Running GPU Postprocess Deflicker on AMT-G output..."
-$POSTPROCESS \
-    -i "$RAW_AMTG" \
-    -o "$CLEAN_AMTG" \
-    --device "$DEVICE" \
-    $NVENC_POST
+# echo "[Stage 2/3] Running GPU Postprocess Deflicker on AMT-G output..."
+# $POSTPROCESS \
+#     -i "$RAW_AMTG" \
+#     -o "$CLEAN_AMTG" \
+#     --device "$DEVICE" \
+#     $NVENC_POST
 
-echo "[Stage 2/3] AMT-G finished -> Clean output: $CLEAN_AMTG ($(date))"
+# echo "[Stage 2/3] AMT-G finished -> Clean output: $CLEAN_AMTG ($(date))"
 
-# ------------------------------------------------------------------------------
-# 3. EMA-VFI + TTA
-# ------------------------------------------------------------------------------
-echo ""
-echo "=========================================================="
-echo "[Stage 3/3] EMA-VFI + TTA: Inter-Frame Cross Attention"
-echo "=========================================================="
-RAW_EMAVFI="${INPUT_STEM}_emavfi_tta_raw.mp4"
-CLEAN_EMAVFI="${INPUT_STEM}_emavfi_clean.mp4"
+# # ------------------------------------------------------------------------------
+# # 3. EMA-VFI + TTA
+# # ------------------------------------------------------------------------------
+# echo ""
+# echo "=========================================================="
+# echo "[Stage 3/3] EMA-VFI + TTA: Inter-Frame Cross Attention"
+# echo "=========================================================="
+# RAW_EMAVFI="${INPUT_STEM}_emavfi_tta_raw.mp4"
+# CLEAN_EMAVFI="${INPUT_STEM}_emavfi_clean.mp4"
 
-$UPFRAME "$INPUT" "$RAW_EMAVFI" \
-    --model ema-vfi \
-    $NVENC_OPT \
-    --tta \
-    $BALL_OPT \
-    --cadence-filter \
-    --anti-flicker \
-    --resume
+# $UPFRAME "$INPUT" "$RAW_EMAVFI" \
+#     --model ema-vfi \
+#     $NVENC_OPT \
+#     --tta \
+#     $BALL_OPT \
+#     --cadence-filter \
+#     --anti-flicker \
+#     --resume
 
-echo "[Stage 3/3] Running GPU Postprocess Deflicker on EMA-VFI output..."
-$POSTPROCESS \
-    -i "$RAW_EMAVFI" \
-    -o "$CLEAN_EMAVFI" \
-    --device "$DEVICE" \
-    $NVENC_POST
+# echo "[Stage 3/3] Running GPU Postprocess Deflicker on EMA-VFI output..."
+# $POSTPROCESS \
+#     -i "$RAW_EMAVFI" \
+#     -o "$CLEAN_EMAVFI" \
+#     --device "$DEVICE" \
+#     $NVENC_POST
 
-echo "[Stage 3/3] EMA-VFI finished -> Clean output: $CLEAN_EMAVFI ($(date))"
+# echo "[Stage 3/3] EMA-VFI finished -> Clean output: $CLEAN_EMAVFI ($(date))"
 
 echo ""
 echo "=========================================================="
 echo " FULL PIPELINE COMPLETED SUCCESSFULLY AT $(date)!"
 echo " Outputs:"
 echo "   1) RIFE Clean   : $CLEAN_RIFE"
-echo "   2) AMT-G Clean  : $CLEAN_AMTG"
-echo "   3) EMA-VFI Clean: $CLEAN_EMAVFI"
+# echo "   2) AMT-G Clean  : $CLEAN_AMTG"
+# echo "   3) EMA-VFI Clean: $CLEAN_EMAVFI"
 echo "=========================================================="

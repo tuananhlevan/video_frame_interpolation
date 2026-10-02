@@ -180,3 +180,72 @@ def test_anti_flicker_process_tensor_preserves_fast_flying_ball():
     assert np_clean_unprot[100, 90, 0] < 100
 
 
+def test_anti_flicker_preserves_large_fast_moving_objects():
+    """Verify that large semantic objects moving at high speed (>150px) are preserved without black holes."""
+    import torch
+    from upframe.utils.tensor import frames_to_tensor_batch, tensor_to_frames_batch
+
+    filter_mod = TemporalAntiFlicker(radius=10, margin=10, outlier_margin=20, protect_ball=False, protect_large_motion=True)
+
+    # Dark background scene [35, 35, 35]
+    f0 = np.full((200, 300, 3), [35, 35, 35], dtype=np.uint8)
+    f1 = np.full((200, 300, 3), [35, 35, 35], dtype=np.uint8)
+    f_inter = np.full((200, 300, 3), [35, 35, 35], dtype=np.uint8)
+
+    # Golden jersey number 40x40 px moves 150px: from x=30 in F0 to x=180 in F1
+    # Interpolated midpoint at x=105 in F_inter (75px away from F0 and F1, far exceeding radius 10)
+    f0[50:90, 30:70] = [120, 180, 220]
+    f1[50:90, 180:220] = [120, 180, 220]
+    f_inter[50:90, 105:145] = [120, 180, 220]
+
+    # CPU numpy test:
+    cleaned_cpu = filter_mod.process(f0, f_inter, f1)
+    # The 40x40 object must be preserved (>180 in green/red), not hollowed out to 35
+    assert np.all(cleaned_cpu[55:85, 110:140, 2] >= 180)
+
+    # GPU tensor test:
+    dev = torch.device("cpu")
+    t0 = frames_to_tensor_batch([f0], dev)
+    t1 = frames_to_tensor_batch([f1], dev)
+    ti = frames_to_tensor_batch([f_inter], dev)
+
+    t_cleaned = filter_mod.process_tensor(t0, ti, t1)
+    cleaned_tensor = tensor_to_frames_batch(t_cleaned)[0]
+    assert np.all(cleaned_tensor[55:85, 110:140, 2] >= 180)
+
+
+def test_anti_flicker_simultaneous_firefly_and_large_motion():
+    """Verify that small fireflies are eliminated while large fast motion in the same frame is preserved."""
+    import torch
+    from upframe.utils.tensor import frames_to_tensor_batch, tensor_to_frames_batch
+
+    filter_mod = TemporalAntiFlicker(radius=10, margin=10, outlier_margin=20, protect_ball=False, protect_large_motion=True)
+
+    f0 = np.full((200, 300, 3), [35, 35, 35], dtype=np.uint8)
+    f1 = np.full((200, 300, 3), [35, 35, 35], dtype=np.uint8)
+    f_inter = np.full((200, 300, 3), [35, 35, 35], dtype=np.uint8)
+
+    # 1. Large moving object at (50:90, 105:145)
+    f0[50:90, 30:70] = [120, 180, 220]
+    f1[50:90, 180:220] = [120, 180, 220]
+    f_inter[50:90, 105:145] = [120, 180, 220]
+
+    # 2. Isolated single-frame firefly noise (2x2 px) at (150:152, 50:52)
+    f_inter[150:152, 50:52] = [255, 255, 255]
+
+    dev = torch.device("cpu")
+    t0 = frames_to_tensor_batch([f0], dev)
+    t1 = frames_to_tensor_batch([f1], dev)
+    ti = frames_to_tensor_batch([f_inter], dev)
+
+    t_cleaned = filter_mod.process_tensor(t0, ti, t1)
+    cleaned = tensor_to_frames_batch(t_cleaned)[0]
+
+    # Large object must be preserved
+    assert np.all(cleaned[55:85, 110:140, 2] >= 180)
+
+    # Firefly must be suppressed to background envelope (<= 45)
+    assert np.all(cleaned[150:152, 50:52] <= 45)
+
+
+

@@ -30,7 +30,9 @@ class TemporalAntiFlicker:
         outlier_margin: int = 20,
         protect_ball: bool = True,
         clamp_undershoot: bool = True,
-        normalize_luminance: bool = True
+        normalize_luminance: bool = True,
+        protect_large_motion: bool = True,
+        motion_kernel_size: int = 11
     ) -> None:
         self.radius = radius
         self.margin = margin
@@ -38,9 +40,19 @@ class TemporalAntiFlicker:
         self.protect_ball = protect_ball
         self.clamp_undershoot = clamp_undershoot
         self.normalize_luminance = normalize_luminance
+        self.protect_large_motion = protect_large_motion
+        self.motion_kernel_size = motion_kernel_size
         self.kernel = cv2.getStructuringElement(
             cv2.MORPH_RECT,
             (2 * radius + 1, 2 * radius + 1)
+        )
+        self.morph_erode_kernel = cv2.getStructuringElement(
+            cv2.MORPH_RECT,
+            (motion_kernel_size, motion_kernel_size)
+        )
+        self.morph_dilate_kernel = cv2.getStructuringElement(
+            cv2.MORPH_RECT,
+            (motion_kernel_size + 6, motion_kernel_size + 6)
         )
 
     @classmethod
@@ -143,6 +155,20 @@ class TemporalAntiFlicker:
         is_severe_outlier = (batch_inter > upper_bound + outlier_delta) | (batch_inter < lower_bound - outlier_delta)
         clamped = torch.where(is_severe_outlier, t_blend, clamped)
 
+        # Morphological scale separation: Protect genuine large moving structures
+        # (e.g. close-up players moving at >30px, player numbers, swinging limbs)
+        # while keeping isolated single-frame firefly noise (<= motion_kernel_size) suppressed.
+        if self.protect_large_motion:
+            violation = (batch_inter > upper_bound) | (batch_inter < lower_bound)
+            violation_mask = violation.any(dim=1, keepdim=True).float()
+            k_sz = self.motion_kernel_size
+            pad_k = k_sz // 2
+            eroded = -F.max_pool2d(-violation_mask, kernel_size=k_sz, stride=1, padding=pad_k)
+            k_dil = k_sz + 6
+            pad_dil = k_dil // 2
+            large_motion_mask = F.max_pool2d(eroded, kernel_size=k_dil, stride=1, padding=pad_dil) > 0.5
+            clamped = torch.where(large_motion_mask, batch_inter, clamped)
+
         # Protect fast-moving ball trajectory
         if ball_mask is not None:
             if ball_mask.dim() == 3:
@@ -218,6 +244,14 @@ class TemporalAntiFlicker:
         if np.any(is_severe):
             t_blend = np.clip(0.5 * frame_0.astype(np.float32) + 0.5 * frame_1.astype(np.float32), 0, 255).astype(np.uint8)
             clamped[is_severe] = t_blend[is_severe]
+
+        # Morphological scale separation: Protect genuine large moving structures
+        if self.protect_large_motion:
+            violation = np.any((frame_inter > upper_bound) | (frame_inter < lower_bound), axis=2).astype(np.uint8)
+            eroded = cv2.erode(violation, self.morph_erode_kernel)
+            large_motion = cv2.dilate(eroded, self.morph_dilate_kernel) > 0
+            if np.any(large_motion):
+                clamped[large_motion] = frame_inter[large_motion]
 
         # 3. Protect ball region from envelope clamping
         if ball_mask is not None and np.any(ball_mask):

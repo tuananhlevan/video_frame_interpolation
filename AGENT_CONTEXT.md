@@ -152,6 +152,18 @@ This was the most critical problem solved in the project. Below is the complete 
    - Per user instruction, completely removed Stage 4 (the 4-layer evaluation benchmark and scorecard generation) from [run_full_comparison_pipeline.sh](file:///home/levantuananh/VDT_VT/video_frame_interpolation/run_full_comparison_pipeline.sh).
    - The script now runs solely the core interpolation and GPU deflickering for the 3 models without wasting time on benchmark metrics.
 
+### 3.6. Close-Up Player Tearing / 25Hz Flickering Artifacts (02:11 Artifact)
+* **Symptom**: In close-up tracking shots of running players (e.g. at 02:11 in `highlight_test_rife.mp4`), dark jagged holes and chromatic fringes were carved into the yellow player jersey numbers, shoulders, and hair on interpolated frames, producing violent 25Hz strobing.
+* **Root Cause**:
+  1. Close-up player motion reached **155 px/frame** displacement (78 px at midpoint $t=0.5$).
+  2. The static envelope radius ($R=16\text{ px}$) in `TemporalAntiFlicker` could not reach the player numbers in $F_0$ or $F_1$ (78 px away), seeing only black jersey.
+  3. `TemporalAntiFlicker` misclassified the bright yellow numbers as single-frame firefly outliers and replaced them with `t_blend` (black jersey).
+* **Resolution**:
+  - Implemented **Morphological Scale Separation** in `TemporalAntiFlicker.process_tensor` (GPU) and `process` (CPU):
+    - Applies morphological opening (erosion with $11\times 11$ kernel, dilation with $17\times 17$ kernel) to the violation mask.
+    - Isolated single-frame firefly noise ($\le 4\text{ px}$) collapses to 0 and is 100% suppressed (preserving the white socks firefly fix).
+    - Large continuous semantic structures (numbers, limbs, bodies) retain their solid cores and are 100% preserved from clamping (hole pixels dropped from 6,191 to 0).
+
 ---
 
 ## 4. Current State & Verification
