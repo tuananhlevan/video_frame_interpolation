@@ -248,4 +248,79 @@ def test_anti_flicker_simultaneous_firefly_and_large_motion():
     assert np.all(cleaned[150:152, 50:52] <= 45)
 
 
+def test_anti_flicker_cavity_healing_on_jersey_number():
+    """Verify that 1-frame optical flow dark tears/cavities on player numbers are healed."""
+    import torch
+    from upframe.utils.tensor import frames_to_tensor_batch, tensor_to_frames_batch
+
+    filter_mod = TemporalAntiFlicker(radius=10, margin=10, outlier_margin=20, enable_cavity_healing=True)
+
+    # Dark jersey background [35, 35, 35]
+    f0 = np.full((120, 120, 3), [35, 35, 35], dtype=np.uint8)
+    f1 = np.full((120, 120, 3), [35, 35, 35], dtype=np.uint8)
+    f_inter = np.full((120, 120, 3), [35, 35, 35], dtype=np.uint8)
+
+    # Number 1 on jersey: solid bright region at (20:100, 45:75)
+    f0[20:100, 40:70] = [120, 180, 220]
+    f1[20:100, 50:80] = [120, 180, 220]
+    f_inter[20:100, 45:75] = [120, 180, 220]
+
+    # RIFE produces an optical flow horizontal tear (dark cavity) in f_inter at (50:53, 48:72)
+    f_inter[50:53, 48:72] = [40, 45, 50]
+
+    # CPU test:
+    cleaned_cpu = filter_mod.process(f0, f_inter, f1)
+    # The tear must be healed back to the surrounding gold color (>= 160)
+    assert np.all(cleaned_cpu[50:53, 48:72, 2] >= 160)
+
+    # GPU tensor test:
+    dev = torch.device("cpu")
+    t0 = frames_to_tensor_batch([f0], dev)
+    t1 = frames_to_tensor_batch([f1], dev)
+    ti = frames_to_tensor_batch([f_inter], dev)
+
+    t_cleaned = filter_mod.process_tensor(t0, ti, t1)
+    cleaned_tensor = tensor_to_frames_batch(t_cleaned)[0]
+    assert np.all(cleaned_tensor[50:53, 48:72, 2] >= 160)
+
+
+def test_anti_flicker_preserves_legitimate_hole():
+    """Verify that legitimate holes (e.g. inner loop of number 8 present across all frames) are NOT filled."""
+    import torch
+    from upframe.utils.tensor import frames_to_tensor_batch, tensor_to_frames_batch
+
+    filter_mod = TemporalAntiFlicker(radius=10, margin=10, outlier_margin=20, enable_cavity_healing=True)
+
+    # Dark background [35, 35, 35]
+    f0 = np.full((120, 120, 3), [35, 35, 35], dtype=np.uint8)
+    f1 = np.full((120, 120, 3), [35, 35, 35], dtype=np.uint8)
+    f_inter = np.full((120, 120, 3), [35, 35, 35], dtype=np.uint8)
+
+    # Outer bright box (20:100, 40:80)
+    f0[20:100, 40:80] = [120, 180, 220]
+    f1[20:100, 40:80] = [120, 180, 220]
+    f_inter[20:100, 40:80] = [120, 180, 220]
+
+    # Inner hollow loop (50:70, 52:68) present in ALL THREE FRAMES
+    f0[50:70, 52:68] = [35, 35, 35]
+    f1[50:70, 52:68] = [35, 35, 35]
+    f_inter[50:70, 52:68] = [35, 35, 35]
+
+    # CPU test:
+    cleaned_cpu = filter_mod.process(f0, f_inter, f1)
+    # The center of the loop must remain dark (<= 50)
+    assert np.all(cleaned_cpu[55:65, 56:64] <= 50)
+
+    # GPU tensor test:
+    dev = torch.device("cpu")
+    t0 = frames_to_tensor_batch([f0], dev)
+    t1 = frames_to_tensor_batch([f1], dev)
+    ti = frames_to_tensor_batch([f_inter], dev)
+
+    t_cleaned = filter_mod.process_tensor(t0, ti, t1)
+    cleaned_tensor = tensor_to_frames_batch(t_cleaned)[0]
+    assert np.all(cleaned_tensor[55:65, 56:64] <= 50)
+
+
+
 

@@ -250,3 +250,9 @@ python -m eval.cli benchmark \
     --eval-dir evaluation_log/benchmark_run \
     --workers 2
 ```
+
+### 6.5. Temporal Cavity Healing (Optical Flow Tear / Dark Spot Repair)
+- Solves RIFE's optical flow shearing tears/holes on high-contrast jersey numbers and names.
+- Uses morphological black-hat cavity detection on intermediate frames guided by temporal neighbor envelopes.
+- Enabled by default in `TemporalAntiFlicker(enable_cavity_healing=True)`.
+

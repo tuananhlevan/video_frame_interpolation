@@ -28,6 +28,10 @@ def deflicker_video(
     radius: int = 10,
     margin: int = 10,
     outlier_margin: int = 20,
+    enable_cavity_healing: bool = True,
+    cavity_kernel_size: int = 7,
+    cavity_threshold: int = 18,
+    cavity_min_luma: int = 70,
     mode: str = "odd",
     device: str = "cuda:0",
     use_nvenc: Optional[bool] = None,
@@ -90,7 +94,15 @@ def deflicker_video(
     )
     encoder.start()
 
-    anti_flicker = TemporalAntiFlicker(radius=radius, margin=margin, outlier_margin=outlier_margin)
+    anti_flicker = TemporalAntiFlicker(
+        radius=radius,
+        margin=margin,
+        outlier_margin=outlier_margin,
+        enable_cavity_healing=enable_cavity_healing,
+        cavity_kernel_size=cavity_kernel_size,
+        cavity_threshold=cavity_threshold,
+        cavity_min_luma=cavity_min_luma
+    )
 
     pbar = tqdm(total=total_frames, desc="Deflickering", unit="frame")
 
@@ -177,6 +189,10 @@ def main() -> None:
     parser.add_argument("-r", "--radius", type=int, default=16, help="Spatial search radius in pixels (default: 16)")
     parser.add_argument("-m", "--margin", type=int, default=10, help="Allowed luminance margin (default: 10)")
     parser.add_argument("--outlier-margin", type=int, default=20, help="Outlier rejection margin (default: 20)")
+    parser.add_argument("--no-cavity-healing", action="store_true", help="Disable optical flow cavity/tear healing")
+    parser.add_argument("--cavity-kernel-size", type=int, default=7, help="Cavity closing kernel size in pixels (default: 7)")
+    parser.add_argument("--cavity-threshold", type=int, default=18, help="Cavity detection threshold (default: 18)")
+    parser.add_argument("--cavity-min-luma", type=int, default=70, help="Minimum luma for bright structures (default: 70)")
     parser.add_argument("--device", default="cuda:0", help="CUDA device or cpu (default: cuda:0)")
     parser.add_argument("--no-nvenc", action="store_true", help="Disable NVENC hardware encoding")
     parser.add_argument("--crf", type=int, default=18, help="CRF quality (default: 18)")
@@ -192,6 +208,10 @@ def main() -> None:
         radius=args.radius,
         margin=args.margin,
         outlier_margin=args.outlier_margin,
+        enable_cavity_healing=not args.no_cavity_healing,
+        cavity_kernel_size=args.cavity_kernel_size,
+        cavity_threshold=args.cavity_threshold,
+        cavity_min_luma=args.cavity_min_luma,
         device=args.device,
         use_nvenc=False if args.no_nvenc else None,
         crf=args.crf,
